@@ -24,15 +24,7 @@ connectDB();
 // CORS middleware (single source of truth)
 app.use(cors({
   origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://192.168.56.1:3000',
-    'http://10.30.23.21:3000',
-    'http://10.30.23.26:3000',
-    'http://10.30.22.195:3000',
-    'http://192.168.137.180:3000',
-    'http://192.168.137.200:3000',
-    'http://192.168.137.116:3000',
+   "https://pulse-backend-tpg8.onrender.com"
     // Add production origins here
   ],
   credentials: true,
