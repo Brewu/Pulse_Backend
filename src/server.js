@@ -24,7 +24,8 @@ connectDB();
 // CORS middleware (single source of truth)
 app.use(cors({
   origin: [
-   "https://pulse-backend-tpg8.onrender.com"
+   "https://pulse-backend-tpg8.onrender.com",
+    "https://rabiesspulse.vercel.app"
     // Add production origins here
   ],
   credentials: true,
