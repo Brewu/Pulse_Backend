@@ -25,7 +25,8 @@ connectDB();
 app.use(cors({
   origin: [
    "https://pulse-backend-tpg8.onrender.com",
-    "https://rabiesspulse.vercel.app"
+    "https://rabiesspulse.vercel.app",
+    "https://rabbiespulse-diyk12auu-brewu-richard-appiahs-projects.vercel.app"
     // Add production origins here
   ],
   credentials: true,
