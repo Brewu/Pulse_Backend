@@ -10,6 +10,7 @@ module.exports = {
         origin: [
           'http://localhost:3000',
           'http://localhost:5173',
+          "https://pulse-eta-cyan.vercel.app"
           // Add production frontend URL here, e.g.:
           // 'https://yourdomain.com'
         ],
