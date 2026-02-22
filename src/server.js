@@ -25,7 +25,8 @@ connectDB();
 app.use(cors({
   origin: [
    "https://pulse-backend-tpg8.onrender.com",
-   "https://pulse-eta-cyan.vercel.app"
+   "https://pulse-eta-cyan.vercel.app",
+    "http://localhost:3000"
     // Add production origins here
   ],
   credentials: true,
