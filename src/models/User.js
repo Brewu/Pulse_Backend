@@ -103,26 +103,134 @@ const userSchema = new mongoose.Schema({
     ref: 'User'
   }],
   
-  // Notification preferences
-  notificationPreferences: {
-    type: {
-      new_message: { type: Boolean, default: true },
-      message_reaction: { type: Boolean, default: true },
-      message_reply: { type: Boolean, default: true },
-      new_follower: { type: Boolean, default: true },
-      post_like: { type: Boolean, default: true },
-      post_comment: { type: Boolean, default: true },
-      comment_reply: { type: Boolean, default: true },
-      mention: { type: Boolean, default: true },
-      friend_request: { type: Boolean, default: true },
-      friend_request_accepted: { type: Boolean, default: true },
-      event_invitation: { type: Boolean, default: true },
-      group_invitation: { type: Boolean, default: true },
-      system: { type: Boolean, default: true }
+  // ========== NEW: Push notification subscriptions ==========
+  pushSubscriptions: [{
+    endpoint: {
+      type: String,
+      required: true,
+      unique: true
     },
-    default: {}
-  },
+    keys: {
+      p256dh: String,
+      auth: String
+    },
+    platform: {
+      type: String,
+      enum: ['web', 'ios', 'android', 'expo'],
+      default: 'web'
+    },
+    deviceName: {
+      type: String,
+      default: 'Unknown Device'
+    },
+    deviceModel: String,
+    appVersion: String,
+    userAgent: String,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    lastUsed: {
+      type: Date,
+      default: Date.now
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    preferences: {
+      sound: { type: Boolean, default: true },
+      vibration: { type: Boolean, default: true },
+      badge: { type: Boolean, default: true },
+      lights: { type: Boolean, default: true }
+    }
+  }],
   
+  // ========== UPDATED: Notification preferences with global and per-type settings ==========
+  notificationPreferences: {
+    // Global settings
+    global: {
+      push: { type: Boolean, default: true },
+      email: { type: Boolean, default: true },
+      inApp: { type: Boolean, default: true },
+      sound: { type: Boolean, default: true },
+      vibration: { type: Boolean, default: true },
+      doNotDisturb: {
+        enabled: { type: Boolean, default: false },
+        startTime: String, // Format: "HH:MM"
+        endTime: String,   // Format: "HH:MM"
+        timezone: { type: String, default: 'UTC' }
+      }
+    },
+    // Per-type settings (override global)
+    types: {
+      new_message: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      message_reaction: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      message_reply: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      new_follower: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      post_like: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      post_comment: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      comment_reply: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      },
+      mention: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      friend_request: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      friend_request_accepted: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      event_invitation: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      group_invitation: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true }
+      },
+      system: { 
+        push: { type: Boolean, default: true },
+        email: { type: Boolean, default: false },
+        sound: { type: Boolean, default: true }
+      }
+    }
+  },
   
   // Privacy settings
   privacySettings: {
@@ -156,7 +264,22 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
-  }
+  },
+  
+  // Last seen for online status
+  lastSeen: {
+    type: Date,
+    default: Date.now
+  },
+  
+  // Device info for push
+  activeDevices: [{
+    deviceId: String,
+    deviceName: String,
+    platform: String,
+    lastActive: Date,
+    pushToken: String
+  }]
   
 }, {
   timestamps: true,
@@ -165,6 +288,13 @@ const userSchema = new mongoose.Schema({
     transform: (doc, ret) => {
       delete ret.password;
       delete ret.__v;
+      // Remove sensitive push subscription keys from JSON output
+      if (ret.pushSubscriptions) {
+        ret.pushSubscriptions = ret.pushSubscriptions.map(sub => ({
+          ...sub,
+          keys: undefined // Don't expose crypto keys in API responses
+        }));
+      }
       return ret;
     }
   },
@@ -178,6 +308,8 @@ userSchema.index({ score: -1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
+userSchema.index({ 'pushSubscriptions.endpoint': 1 }); // For faster subscription lookups
+userSchema.index({ lastSeen: -1 }); // For online status queries
 
 // ========== VIRTUALS ==========
 userSchema.virtual('followerCount').get(function() {
@@ -188,12 +320,22 @@ userSchema.virtual('followingCount').get(function() {
   return this.following ? this.following.length : 0;
 });
 
+userSchema.virtual('isOnline').get(function() {
+  // Consider user online if lastSeen within last 5 minutes
+  return this.lastSeen && (Date.now() - this.lastSeen < 5 * 60 * 1000);
+});
+
 // ========== PRE-SAVE MIDDLEWARE ==========
 userSchema.pre('save', async function() {
   if (!this.isModified('password')) return;
   
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
+});
+
+// Update lastSeen on save
+userSchema.pre('save', function() {
+  this.lastSeen = new Date();
 });
 
 // ========== PRE-REMOVE MIDDLEWARE ==========
@@ -225,7 +367,139 @@ userSchema.methods.getPublicProfile = function() {
   delete userObject.__v;
   delete userObject.privacySettings;
   delete userObject.notificationPreferences;
+  delete userObject.pushSubscriptions;
+  delete userObject.activeDevices;
   return userObject;
+};
+
+// ========== NEW: Push notification subscription methods ==========
+// Add a push subscription
+userSchema.methods.addPushSubscription = async function(subscriptionData) {
+  // Check if subscription already exists
+  const existingIndex = this.pushSubscriptions.findIndex(
+    sub => sub.endpoint === subscriptionData.endpoint
+  );
+
+  const newSubscription = {
+    endpoint: subscriptionData.endpoint,
+    keys: subscriptionData.keys || {},
+    platform: subscriptionData.platform || 'web',
+    deviceName: subscriptionData.deviceName || 'Unknown Device',
+    deviceModel: subscriptionData.deviceModel,
+    appVersion: subscriptionData.appVersion,
+    userAgent: subscriptionData.userAgent,
+    lastUsed: new Date(),
+    isActive: true,
+    preferences: {
+      sound: subscriptionData.preferences?.sound ?? true,
+      vibration: subscriptionData.preferences?.vibration ?? true,
+      badge: subscriptionData.preferences?.badge ?? true,
+      lights: subscriptionData.preferences?.lights ?? true
+    }
+  };
+
+  if (existingIndex >= 0) {
+    // Update existing subscription
+    this.pushSubscriptions[existingIndex] = {
+      ...this.pushSubscriptions[existingIndex].toObject(),
+      ...newSubscription,
+      createdAt: this.pushSubscriptions[existingIndex].createdAt
+    };
+  } else {
+    // Add new subscription
+    this.pushSubscriptions.push(newSubscription);
+  }
+
+  await this.save();
+  return this.pushSubscriptions;
+};
+
+// Remove a push subscription
+userSchema.methods.removePushSubscription = async function(endpoint) {
+  this.pushSubscriptions = this.pushSubscriptions.filter(
+    sub => sub.endpoint !== endpoint
+  );
+  await this.save();
+  return this.pushSubscriptions;
+};
+
+// Update subscription last used time
+userSchema.methods.updateSubscriptionLastUsed = async function(endpoint) {
+  const subscription = this.pushSubscriptions.find(
+    sub => sub.endpoint === endpoint
+  );
+  if (subscription) {
+    subscription.lastUsed = new Date();
+    await this.save();
+  }
+};
+
+// Get active push subscriptions
+userSchema.methods.getActiveSubscriptions = function() {
+  return this.pushSubscriptions.filter(sub => sub.isActive);
+};
+
+// ========== NEW: Notification preference methods ==========
+// Check if user wants to receive this type of notification
+userSchema.methods.shouldNotify = function(type, channel = 'push') {
+  // Check global DND
+  if (this.notificationPreferences.global.doNotDisturb.enabled) {
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    const { startTime, endTime } = this.notificationPreferences.global.doNotDisturb;
+    
+    if (startTime && endTime) {
+      if (startTime <= endTime) {
+        if (currentTime >= startTime && currentTime <= endTime) {
+          return false; // DND active
+        }
+      } else {
+        // Overnight DND
+        if (currentTime >= startTime || currentTime <= endTime) {
+          return false; // DND active
+        }
+      }
+    }
+  }
+
+  // Check global preference for this channel
+  if (!this.notificationPreferences.global[channel]) {
+    return false;
+  }
+
+  // Check type-specific preference
+  const typePrefs = this.notificationPreferences.types[type];
+  if (typePrefs && typePrefs[channel] !== undefined) {
+    return typePrefs[channel];
+  }
+
+  // Default to true
+  return true;
+};
+
+// Update notification preferences
+userSchema.methods.updateNotificationPreferences = async function(preferences) {
+  if (preferences.global) {
+    this.notificationPreferences.global = {
+      ...this.notificationPreferences.global,
+      ...preferences.global
+    };
+  }
+  
+  if (preferences.types) {
+    this.notificationPreferences.types = {
+      ...this.notificationPreferences.types,
+      ...preferences.types
+    };
+  }
+  
+  await this.save();
+  return this.notificationPreferences;
 };
 
 // UPDATED: Score update method with 10 ranks
@@ -270,7 +544,7 @@ userSchema.methods.updateScore = function(action) {
   return this;
 };
 
-// NEW: Helper method to get next rank information
+// Helper method to get next rank information
 userSchema.methods.getNextRankInfo = function() {
   const rankThresholds = [
     { name: 'Rookie', next: 'Bronze', threshold: 1000, color: '#9ca3af', icon: '🌱' },
@@ -289,7 +563,7 @@ userSchema.methods.getNextRankInfo = function() {
   return rankThresholds[currentRankIndex] || rankThresholds[0];
 };
 
-// NEW: Calculate progress to next rank
+// Calculate progress to next rank
 userSchema.methods.getRankProgress = function() {
   const rankThresholds = [
     { min: 0, max: 999 },
@@ -379,7 +653,7 @@ userSchema.statics.search = async function(query, currentUserId, limit = 20) {
       { isActive: true }
     ]
   })
-  .select('username name profilePicture bio followers rank score')
+  .select('username name profilePicture bio followers rank score lastSeen')
   .limit(limit)
   .lean();
 };
@@ -397,10 +671,30 @@ userSchema.statics.getSuggestions = async function(userId, limit = 5) {
     },
     isActive: true
   })
-  .select('username name profilePicture bio followers rank score')
+  .select('username name profilePicture bio followers rank score lastSeen')
   .sort({ score: -1, followers: -1 })
   .limit(limit)
   .lean();
+};
+
+// ========== NEW: Clean up stale push subscriptions ==========
+userSchema.statics.cleanupStaleSubscriptions = async function(daysOld = 30) {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+  const result = await this.updateMany(
+    {},
+    {
+      $pull: {
+        pushSubscriptions: {
+          lastUsed: { $lt: cutoffDate }
+        }
+      }
+    }
+  );
+
+  console.log(`🧹 Cleaned up stale push subscriptions: ${result.modifiedCount} users affected`);
+  return result;
 };
 
 // ========== EXPORT ==========

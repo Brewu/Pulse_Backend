@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+// ✅ SINGLE require at the top - use lowercase for consistency
 
 const notificationSchema = new mongoose.Schema({
   recipient: {
@@ -12,11 +13,11 @@ const notificationSchema = new mongoose.Schema({
     ref: 'User',
     index: true
   },
-   senderUsername: {
+  senderUsername: {
     type: String,
     trim: true
   },
-  
+
   type: {
     type: String,
     enum: [
@@ -36,7 +37,7 @@ const notificationSchema = new mongoose.Schema({
     ],
     required: true
   },
-  
+
   // Reference to the related entity
   reference: {
     model: {
@@ -47,63 +48,71 @@ const notificationSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId
     }
   },
-  
+
   title: {
     type: String,
     trim: true,
     maxlength: 200
   },
-  
+
   message: {
     type: String,
     trim: true,
     maxlength: 500
   },
-  
+
   // For deep linking
   actionUrl: {
     type: String,
     trim: true
   },
-  
+
   // Notification status
   isRead: {
     type: Boolean,
     default: false
   },
-  
+
   isArchived: {
     type: Boolean,
     default: false
   },
-  
+
   // For push notifications
   pushSent: {
     type: Boolean,
     default: false
   },
-  
+
   pushSentAt: Date,
-  
+
+  pushResults: [{
+    deviceId: String,
+    platform: String,
+    success: Boolean,
+    sentAt: Date,
+    error: String
+  }],
+
   // For email notifications
   emailSent: {
     type: Boolean,
     default: false
   },
-  
+
   emailSentAt: Date,
-  
+
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  
+
   createdAt: {
     type: Date,
     default: Date.now,
     index: true
   },
-  
+
   readAt: Date
 }, {
   timestamps: true,
@@ -115,11 +124,12 @@ const notificationSchema = new mongoose.Schema({
 notificationSchema.index({ recipient: 1, isRead: 1 });
 notificationSchema.index({ recipient: 1, createdAt: -1 });
 notificationSchema.index({ recipient: 1, type: 1 });
+notificationSchema.index({ pushSent: 1, createdAt: -1 });
 
 // Virtual for formatted date
-notificationSchema.virtual('timeAgo').get(function() {
+notificationSchema.virtual('timeAgo').get(function () {
   const seconds = Math.floor((new Date() - this.createdAt) / 1000);
-  
+
   const intervals = {
     year: 31536000,
     month: 2592000,
@@ -136,12 +146,12 @@ notificationSchema.virtual('timeAgo').get(function() {
       return interval === 1 ? `1 ${unit} ago` : `${interval} ${unit}s ago`;
     }
   }
-  
+
   return 'just now';
 });
 
-// Method to generate notification content based on type (no next() callback)
-notificationSchema.methods.generateNotificationContent = function() {
+// Method to generate notification content based on type
+notificationSchema.methods.generateNotificationContent = function () {
   const notificationTemplates = {
     'new_message': {
       title: 'New Message',
@@ -216,39 +226,33 @@ notificationSchema.methods.generateNotificationContent = function() {
     actionUrl: '/'
   };
 
-  // Set title if not already set
   if (!this.title) {
     this.title = template.title;
   }
 
-  // Build message with sender info if available
   if (!this.message) {
-    this.message = this.sender 
+    this.message = this.sender
       ? `@${this.senderUsername || 'Someone'} ${template.message}`
       : template.message;
   }
 
-  // Set action URL if not already set
   if (!this.actionUrl) {
     this.actionUrl = template.actionUrl;
   }
 };
 
-// Pre-save hook without next() callback - using async function
-notificationSchema.pre('save', async function() {
-  // Generate content if title or message is missing
+// Pre-save hook
+notificationSchema.pre('save', async function () {
   if (!this.title || !this.message) {
     this.generateNotificationContent();
   }
 
-  // If sender is provided but we need username for the message
   if (this.sender && !this.senderUsername) {
     try {
       const User = mongoose.model('User');
       const senderUser = await User.findById(this.sender).select('username');
       if (senderUser) {
         this.senderUsername = senderUser.username;
-        // Regenerate message with username
         if (!this.message.includes('@')) {
           this.generateNotificationContent();
         }
@@ -259,15 +263,14 @@ notificationSchema.pre('save', async function() {
   }
 });
 
-// Pre-find hook to populate sender username
-notificationSchema.pre(/^find/, function() {
+// Pre-find hook
+notificationSchema.pre(/^find/, function () {
   this.populate('sender', 'username profilePicture');
 });
 
-// Static method to create notification (no callback)
-notificationSchema.statics.createNotification = async function(data) {
+// ✅ FIXED: Static method to create notification with push
+notificationSchema.statics.createNotification = async function (data) {
   try {
-    // Fetch sender username if sender ID is provided
     if (data.sender && !data.senderUsername) {
       const User = mongoose.model('User');
       const sender = await User.findById(data.sender).select('username');
@@ -276,18 +279,15 @@ notificationSchema.statics.createNotification = async function(data) {
       }
     }
 
-    // Create notification instance
     const notification = new this(data);
-    
-    // Generate content if not provided
+
     if (!notification.title || !notification.message) {
       notification.generateNotificationContent();
     }
 
-    // Save to database
     await notification.save();
 
-    // Emit real-time event via Socket.io
+    // Socket.io emit
     try {
       const io = require('../services/websocket').getIO?.();
       if (io) {
@@ -297,6 +297,23 @@ notificationSchema.statics.createNotification = async function(data) {
       console.error('Failed to emit socket notification:', socketError);
     }
 
+    // ✅ FIXED: Use the single pushService instance from top
+    try {
+      pushService.sendToUser(notification.recipient, notification.toObject())
+        .then(success => {
+          if (success) {
+            notification.pushSent = true;
+            notification.pushSentAt = new Date();
+            notification.save().catch(err =>
+              console.error('Error saving pushSent status:', err)
+            );
+          }
+        })
+        .catch(err => console.error('Push service error:', err));
+    } catch (pushError) {
+      console.error('Failed to initialize push notification:', pushError);
+    }
+
     return notification;
   } catch (error) {
     console.error('Failed to create notification:', error);
@@ -304,65 +321,111 @@ notificationSchema.statics.createNotification = async function(data) {
   }
 };
 
-// Method to mark as read (no callback)
-notificationSchema.methods.markAsRead = async function() {
+// Method to mark as read
+notificationSchema.methods.markAsRead = async function () {
   if (!this.isRead) {
     this.isRead = true;
     this.readAt = new Date();
     await this.save();
+
+    // ✅ FIXED: Use the single pushService instance
+    try {
+      const unreadCount = await this.constructor.getUnreadCount(this.recipient);
+      await pushService.sendBadgeUpdate(this.recipient, unreadCount);
+    } catch (error) {
+      console.error('Failed to update badge:', error);
+    }
   }
   return this;
 };
 
 // Method to mark as unread
-notificationSchema.methods.markAsUnread = async function() {
+notificationSchema.methods.markAsUnread = async function () {
   if (this.isRead) {
     this.isRead = false;
     this.readAt = null;
     await this.save();
+
+    // ✅ FIXED: Use the single pushService instance
+    try {
+      const unreadCount = await this.constructor.getUnreadCount(this.recipient);
+      await pushService.sendBadgeUpdate(this.recipient, unreadCount);
+    } catch (error) {
+      console.error('Failed to update badge:', error);
+    }
   }
   return this;
 };
 
 // Method to archive
-notificationSchema.methods.archive = async function() {
+notificationSchema.methods.archive = async function () {
   this.isArchived = true;
   await this.save();
   return this;
 };
 
 // Static method to mark multiple as read
-notificationSchema.statics.markAllAsRead = async function(recipientId) {
+notificationSchema.statics.markAllAsRead = async function (recipientId) {
   const result = await this.updateMany(
     { recipient: recipientId, isRead: false },
-    { 
-      isRead: true, 
-      readAt: new Date() 
+    {
+      isRead: true,
+      readAt: new Date()
     }
   );
+
+  // ✅ FIXED: Use the single pushService instance
+  try {
+    await pushService.sendBadgeUpdate(recipientId, 0);
+  } catch (error) {
+    console.error('Failed to clear badge:', error);
+  }
+
   return result;
 };
 
 // Static method to get unread count
-notificationSchema.statics.getUnreadCount = async function(recipientId) {
-  return await this.countDocuments({ 
-    recipient: recipientId, 
+notificationSchema.statics.getUnreadCount = async function (recipientId) {
+  return await this.countDocuments({
+    recipient: recipientId,
     isRead: false,
-    isArchived: false 
+    isArchived: false
   });
 };
 
+// Static method to retry failed push notifications
+notificationSchema.statics.retryFailedPush = async function (hoursAgo = 1) {
+  const cutoffTime = new Date();
+  cutoffTime.setHours(cutoffTime.getHours() - hoursAgo);
+
+  const failedNotifications = await this.find({
+    pushSent: false,
+    createdAt: { $gte: cutoffTime }
+  }).limit(50);
+
+  for (const notification of failedNotifications) {
+    try {
+      // ✅ FIXED: Use the single pushService instance
+      await pushService.sendToUser(notification.recipient, notification.toObject());
+    } catch (error) {
+      console.error(`Retry failed for notification ${notification._id}:`, error);
+    }
+  }
+
+  return failedNotifications.length;
+};
+
 // Static method to clean up old notifications
-notificationSchema.statics.cleanup = async function(daysOld = 30) {
+notificationSchema.statics.cleanup = async function (daysOld = 30) {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-  
+
   const result = await this.deleteMany({
     createdAt: { $lt: cutoffDate },
     isRead: true,
     isArchived: true
   });
-  
+
   return result;
 };
 

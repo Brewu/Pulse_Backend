@@ -5,7 +5,7 @@ const http = require('http');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const conversationRoutes = require('./routes/conversationRoutes');
-const messageRoutes = require('./routes/messageRoutes'); 
+const messageRoutes = require('./routes/messageRoutes');
 // Import the clean websocket service
 const websocketService = require('./services/websocket'); // Adjust path if needed
 
@@ -104,10 +104,17 @@ try {
 } catch (error) {
   console.log(`❌ Failed to load message routes:`, error.message);
 }
+try {
+  const pushRoutes = require('./routes/pushRoutes');
+  app.use('/api/push', pushRoutes);
+  console.log(`✅ Loaded push notification routes`);
+} catch (error) {
+  console.log(`❌ Failed to load push routes:`, error.message);
+}
 
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, "0.0.0.0",() => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`\n🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 WebSocket ready at ws://localhost:${PORT}`);
   console.log(`\n📊 Registered Mongoose models:`, Object.keys(mongoose.models));
