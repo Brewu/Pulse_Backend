@@ -251,27 +251,34 @@ commentSchema.statics.getByPostOptimized = async function (postId, page = 1, lim
   };
 };
 
+// ========== STATIC METHODS ==========
 commentSchema.statics.deleteWithReplies = async function (commentId) {
   const Comment = this;
 
-  const getAllNestedIds = async (id) => {
-    const children = await Comment.find({ parentComment: id }, '_id');
-    let ids = children.map(c => c._id.toString());
-
-    for (const child of children) {
-      const nestedIds = await getAllNestedIds(child._id);
-      ids = ids.concat(nestedIds);
-    }
-
-    return ids;
-  };
-
   try {
-    const nestedIds = await getAllNestedIds(commentId);
-    const allIds = [commentId, ...nestedIds];
+    // Function to recursively get all reply IDs
+    const getAllReplyIds = async (id) => {
+      const replies = await Comment.find({ parentComment: id }).select('_id');
+      let ids = replies.map(r => r._id.toString());
 
-    await Comment.deleteMany({ _id: { $in: allIds } });
+      for (const reply of replies) {
+        const nestedIds = await getAllReplyIds(reply._id);
+        ids = [...ids, ...nestedIds];
+      }
 
+      return ids;
+    };
+
+    // Get all reply IDs
+    const replyIds = await getAllReplyIds(commentId);
+
+    // Include the original comment
+    const allIds = [commentId, ...replyIds];
+
+    // Delete all comments
+    const result = await Comment.deleteMany({ _id: { $in: allIds } });
+
+    // Update parent comment's repliesCount if this was a reply
     const comment = await Comment.findById(commentId);
     if (comment?.parentComment) {
       await Comment.findByIdAndUpdate(
@@ -280,9 +287,9 @@ commentSchema.statics.deleteWithReplies = async function (commentId) {
       );
     }
 
-    return { deletedCount: allIds.length };
+    return result;
   } catch (error) {
-    console.error('Error deleting comment with replies:', error);
+    console.error('Error in deleteWithReplies:', error);
     throw error;
   }
 };

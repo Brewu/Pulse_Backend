@@ -522,6 +522,16 @@ router.put('/:commentId',
  * @desc    Delete a comment (and all its replies)
  * @access  Private (Owner only)
  */
+/**
+ * @route   DELETE /api/comments/:commentId
+ * @desc    Delete a comment (and all its replies)
+ * @access  Private (Owner only)
+ */
+/**
+ * @route   DELETE /api/comments/:commentId
+ * @desc    Delete a comment (and all its replies)
+ * @access  Private (Owner only)
+ */
 router.delete('/:commentId',
   protect,
   [
@@ -533,26 +543,49 @@ router.delete('/:commentId',
     const { commentId } = req.params;
     const comment = req.comment;
 
-    // Delete comment and all replies
-    const result = await Comment.deleteWithReplies(commentId);
+    try {
+      console.log(`🗑️ Deleting comment ${commentId}`);
 
-    // Update counts
-    await Promise.all([
+      // Delete comment and all replies using the model method
+      const result = await Comment.deleteWithReplies(commentId);
+
+      console.log(`✅ Deleted ${result.deletedCount} comments`);
+
+      // Update counts in parallel
+      const updatePromises = [];
+
       // Update post's comment count if this is a top-level comment
-      !comment.parentComment && Post.findByIdAndUpdate(comment.post, {
-        $inc: { commentsCount: -1 }
-      }),
-      // Update user's comment count
-      User.findByIdAndUpdate(req.user.id, {
-        $inc: { commentsCount: -1 }
-      })
-    ].filter(Boolean));
+      if (!comment.parentComment) {
+        updatePromises.push(
+          Post.findByIdAndUpdate(comment.post, {
+            $inc: { commentsCount: -1 }
+          }).catch(err => console.error('Error updating post count:', err))
+        );
+      }
 
-    res.json({
-      success: true,
-      message: 'Comment deleted successfully',
-      deletedCount: result.deletedCount
-    });
+      // Update user's comment count
+      updatePromises.push(
+        User.findByIdAndUpdate(req.user.id, {
+          $inc: { commentsCount: -1 }
+        }).catch(err => console.error('Error updating user count:', err))
+      );
+
+      // Wait for all updates to complete (don't fail if one fails)
+      await Promise.allSettled(updatePromises);
+
+      res.json({
+        success: true,
+        message: 'Comment deleted successfully',
+        deletedCount: result?.deletedCount || 0
+      });
+    } catch (error) {
+      console.error('❌ Error deleting comment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to delete comment',
+        error: error.message
+      });
+    }
   }));
 
 /**
