@@ -27,6 +27,7 @@ app.use(cors({
    "https://pulse-backend-tpg8.onrender.com",
    "https://pulse-eta-cyan.vercel.app",
     "http://localhost:3000"
+    "http://192.168.56.1:3000"
     // Add production origins here
   ],
   credentials: true,
