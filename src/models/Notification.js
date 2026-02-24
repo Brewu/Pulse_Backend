@@ -125,7 +125,15 @@ notificationSchema.index({ recipient: 1, isRead: 1 });
 notificationSchema.index({ recipient: 1, createdAt: -1 });
 notificationSchema.index({ recipient: 1, type: 1 });
 notificationSchema.index({ pushSent: 1, createdAt: -1 });
+// In backend/models/Notification.js - update your existing indexes
 
+// ========== INDEXES FOR PERFORMANCE ==========
+notificationSchema.index({ recipient: 1, createdAt: -1 }); // For user notifications
+notificationSchema.index({ recipient: 1, isRead: 1 }); // For unread counts
+notificationSchema.index({ recipient: 1, type: 1, createdAt: -1 }); // For filtered notifications
+notificationSchema.index({ sender: 1, recipient: 1 }); // For interactions between users
+notificationSchema.index({ pushSent: 1, createdAt: -1 }); // For push retry logic
+notificationSchema.index({ isArchived: 1, createdAt: -1 }); // For cleanup
 // Virtual for formatted date
 notificationSchema.virtual('timeAgo').get(function () {
   const seconds = Math.floor((new Date() - this.createdAt) / 1000);

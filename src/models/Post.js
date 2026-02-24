@@ -246,12 +246,25 @@ postSchema.index({ visibility: 1 });
 postSchema.index({ engagementScore: -1 });
 postSchema.index({ 'poll.endsAt': 1 });
 postSchema.index({ content: 'text', tags: 'text' });
-// In your Post model - add these indexes
-postSchema.index({ author: 1, createdAt: -1 }); // For user posts
-postSchema.index({ visibility: 1, createdAt: -1 }); // For public feed
+// In backend/models/Post.js - add this before module.exports
+
+// ========== INDEXES FOR PERFORMANCE ==========
+postSchema.index({ author: 1, createdAt: -1 }); // For user profile posts and feed
+postSchema.index({ visibility: 1, createdAt: -1 }); // For public feed filtering
 postSchema.index({ 'media.mediaType': 1 }); // For video/reels queries
-postSchema.index({ tags: 1 }); // For hashtag searches
+postSchema.index({ tags: 1 }); // For hashtag searches and trends
 postSchema.index({ createdAt: -1 }); // For general sorting
+postSchema.index({ likesCount: -1, createdAt: -1 }); // For trending posts
+postSchema.index({ commentsCount: -1, createdAt: -1 }); // For popular discussions
+postSchema.index({ author: 1, visibility: 1, createdAt: -1 }); // Compound for feed
+postSchema.index({ 'poll.endsAt': 1 }); // For active polls
+postSchema.index({ isHidden: 1, createdAt: -1 }); // For moderation
+postSchema.index({ content: 'text', tags: 'text' }); // For text search
+
+// If you have location-based features
+postSchema.index({ 'location.coordinates': '2dsphere' }); // For geo queries
+
+
 // ========== MIDDLEWARE - NO NEXT() ==========
 // ✅ FIXED: No next() parameter
 postSchema.pre('save', async function () {

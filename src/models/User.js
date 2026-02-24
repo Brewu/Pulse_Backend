@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema({
     minlength: [3, 'Username must be at least 3 characters'],
     maxlength: [30, 'Username cannot exceed 30 characters']
   },
-  
+
   email: {
     type: String,
     required: [true, 'Please provide an email'],
@@ -19,43 +19,43 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email']
   },
-  
+
   password: {
     type: String,
     required: [true, 'Please provide a password'],
     minlength: [6, 'Password must be at least 6 characters'],
     select: false
   },
-  
+
   name: {
     type: String,
     trim: true,
     maxlength: [50, 'Name cannot exceed 50 characters']
   },
-  
+
   profilePicture: {
     type: String,
     default: 'https://res.cloudinary.com/demo/image/upload/v1570979186/default-avatar.png'
   },
-  
+
   coverPicture: {
     type: String,
     default: ''
   },
-  
+
   bio: {
     type: String,
     maxlength: [500, 'Bio cannot exceed 500 characters'],
     default: ''
   },
-  
+
   // Score and rank system - UPDATED WITH 10 RANKS
   score: {
     type: Number,
     default: 0,
     min: 0
   },
-  
+
   rank: {
     type: String,
     enum: [
@@ -72,37 +72,37 @@ const userSchema = new mongoose.Schema({
     ],
     default: 'Rookie'
   },
-  
+
   // Activity counts
   postsCount: {
     type: Number,
     default: 0,
     min: 0
   },
-  
+
   commentsCount: {
     type: Number,
     default: 0,
     min: 0
   },
-  
+
   likesReceived: {
     type: Number,
     default: 0,
     min: 0
   },
-  
+
   // Social fields
   followers: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-  
+
   following: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-  
+
   // ========== NEW: Push notification subscriptions ==========
   pushSubscriptions: [{
     endpoint: {
@@ -145,7 +145,7 @@ const userSchema = new mongoose.Schema({
       lights: { type: Boolean, default: true }
     }
   }],
-  
+
   // ========== UPDATED: Notification preferences with global and per-type settings ==========
   notificationPreferences: {
     // Global settings
@@ -164,74 +164,74 @@ const userSchema = new mongoose.Schema({
     },
     // Per-type settings (override global)
     types: {
-      new_message: { 
+      new_message: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      message_reaction: { 
+      message_reaction: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      message_reply: { 
+      message_reply: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      new_follower: { 
+      new_follower: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      post_like: { 
+      post_like: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      post_comment: { 
+      post_comment: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      comment_reply: { 
+      comment_reply: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       },
-      mention: { 
+      mention: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      friend_request: { 
+      friend_request: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      friend_request_accepted: { 
+      friend_request_accepted: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      event_invitation: { 
+      event_invitation: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      group_invitation: { 
+      group_invitation: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: true },
         sound: { type: Boolean, default: true }
       },
-      system: { 
+      system: {
         push: { type: Boolean, default: true },
         email: { type: Boolean, default: false },
         sound: { type: Boolean, default: true }
       }
     }
   },
-  
+
   // Privacy settings
   privacySettings: {
     profileVisibility: {
@@ -253,25 +253,25 @@ const userSchema = new mongoose.Schema({
       default: 'everyone'
     }
   },
-  
+
   // Account verification
   isVerified: {
     type: Boolean,
     default: false
   },
-  
+
   // Account status
   isActive: {
     type: Boolean,
     default: true
   },
-  
+
   // Last seen for online status
   lastSeen: {
     type: Date,
     default: Date.now
   },
-  
+
   // Device info for push
   activeDevices: [{
     deviceId: String,
@@ -280,10 +280,10 @@ const userSchema = new mongoose.Schema({
     lastActive: Date,
     pushToken: String
   }]
-  
+
 }, {
   timestamps: true,
-  toJSON: { 
+  toJSON: {
     virtuals: true,
     transform: (doc, ret) => {
       delete ret.password;
@@ -310,58 +310,69 @@ userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
 userSchema.index({ 'pushSubscriptions.endpoint': 1 }); // For faster subscription lookups
 userSchema.index({ lastSeen: -1 }); // For online status queries
+// In backend/models/User.js - add before module.exports
 
+// ========== INDEXES FOR PERFORMANCE ==========
+userSchema.index({ username: 1 }); // For username lookups (already have unique)
+userSchema.index({ email: 1 }); // For email lookups (already have unique)
+userSchema.index({ followers: 1 }); // For follower counts and lists
+userSchema.index({ following: 1 }); // For following lists
+userSchema.index({ score: -1 }); // For leaderboards/ranking
+userSchema.index({ createdAt: -1 }); // For sorting by join date
+userSchema.index({ 'pushSubscriptions.endpoint': 1 }); // For push notification lookups
+userSchema.index({ lastSeen: -1 }); // For online status queries
+userSchema.index({ isActive: 1, createdAt: -1 }); // For active users
 // ========== VIRTUALS ==========
-userSchema.virtual('followerCount').get(function() {
+userSchema.virtual('followerCount').get(function () {
   return this.followers ? this.followers.length : 0;
 });
 
-userSchema.virtual('followingCount').get(function() {
+userSchema.virtual('followingCount').get(function () {
   return this.following ? this.following.length : 0;
 });
 
-userSchema.virtual('isOnline').get(function() {
+userSchema.virtual('isOnline').get(function () {
   // Consider user online if lastSeen within last 5 minutes
   return this.lastSeen && (Date.now() - this.lastSeen < 5 * 60 * 1000);
 });
 
 // ========== PRE-SAVE MIDDLEWARE ==========
-userSchema.pre('save', async function() {
+userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
-  
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });
 
 // Update lastSeen on save
-userSchema.pre('save', function() {
+userSchema.pre('save', function () {
   this.lastSeen = new Date();
 });
 
 // ========== PRE-REMOVE MIDDLEWARE ==========
-userSchema.pre('remove', async function() {
+userSchema.pre('remove', async function () {
   console.log(`🗑️ Removing user ${this._id} and cleaning up references...`);
-  
+
   await mongoose.model('User').updateMany(
     { followers: this._id },
     { $pull: { followers: this._id } }
   );
-  
+
   await mongoose.model('User').updateMany(
     { following: this._id },
     { $pull: { following: this._id } }
   );
-  
+
   await mongoose.model('Post').deleteMany({ author: this._id });
   await mongoose.model('Comment').deleteMany({ author: this._id });
 });
 
 // ========== INSTANCE METHODS ==========
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-userSchema.methods.getPublicProfile = function() {
+userSchema.methods.getPublicProfile = function () {
   const userObject = this.toObject();
   delete userObject.password;
   delete userObject.__v;
@@ -374,7 +385,7 @@ userSchema.methods.getPublicProfile = function() {
 
 // ========== NEW: Push notification subscription methods ==========
 // Add a push subscription
-userSchema.methods.addPushSubscription = async function(subscriptionData) {
+userSchema.methods.addPushSubscription = async function (subscriptionData) {
   // Check if subscription already exists
   const existingIndex = this.pushSubscriptions.findIndex(
     sub => sub.endpoint === subscriptionData.endpoint
@@ -415,7 +426,7 @@ userSchema.methods.addPushSubscription = async function(subscriptionData) {
 };
 
 // Remove a push subscription
-userSchema.methods.removePushSubscription = async function(endpoint) {
+userSchema.methods.removePushSubscription = async function (endpoint) {
   this.pushSubscriptions = this.pushSubscriptions.filter(
     sub => sub.endpoint !== endpoint
   );
@@ -424,7 +435,7 @@ userSchema.methods.removePushSubscription = async function(endpoint) {
 };
 
 // Update subscription last used time
-userSchema.methods.updateSubscriptionLastUsed = async function(endpoint) {
+userSchema.methods.updateSubscriptionLastUsed = async function (endpoint) {
   const subscription = this.pushSubscriptions.find(
     sub => sub.endpoint === endpoint
   );
@@ -435,24 +446,24 @@ userSchema.methods.updateSubscriptionLastUsed = async function(endpoint) {
 };
 
 // Get active push subscriptions
-userSchema.methods.getActiveSubscriptions = function() {
+userSchema.methods.getActiveSubscriptions = function () {
   return this.pushSubscriptions.filter(sub => sub.isActive);
 };
 
 // ========== NEW: Notification preference methods ==========
 // Check if user wants to receive this type of notification
-userSchema.methods.shouldNotify = function(type, channel = 'push') {
+userSchema.methods.shouldNotify = function (type, channel = 'push') {
   // Check global DND
   if (this.notificationPreferences.global.doNotDisturb.enabled) {
     const now = new Date();
-    const currentTime = now.toLocaleTimeString('en-US', { 
-      hour12: false, 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    const currentTime = now.toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
     });
-    
+
     const { startTime, endTime } = this.notificationPreferences.global.doNotDisturb;
-    
+
     if (startTime && endTime) {
       if (startTime <= endTime) {
         if (currentTime >= startTime && currentTime <= endTime) {
@@ -483,27 +494,27 @@ userSchema.methods.shouldNotify = function(type, channel = 'push') {
 };
 
 // Update notification preferences
-userSchema.methods.updateNotificationPreferences = async function(preferences) {
+userSchema.methods.updateNotificationPreferences = async function (preferences) {
   if (preferences.global) {
     this.notificationPreferences.global = {
       ...this.notificationPreferences.global,
       ...preferences.global
     };
   }
-  
+
   if (preferences.types) {
     this.notificationPreferences.types = {
       ...this.notificationPreferences.types,
       ...preferences.types
     };
   }
-  
+
   await this.save();
   return this.notificationPreferences;
 };
 
 // UPDATED: Score update method with 10 ranks
-userSchema.methods.updateScore = function(action) {
+userSchema.methods.updateScore = function (action) {
   const scoreMap = {
     'post_created': 20,
     'comment_created': 5,
@@ -512,13 +523,13 @@ userSchema.methods.updateScore = function(action) {
     'follower_gained': 10,
     'profile_completed': 15
   };
-  
+
   if (scoreMap[action]) {
     if (!this.score) this.score = 0;
     this.score += scoreMap[action];
     if (this.score > 1000000) this.score = 1000000;
   }
-  
+
   // 10 Ranks with score thresholds
   const rankThresholds = [
     { name: 'Rookie', min: 0, max: 999 },
@@ -532,7 +543,7 @@ userSchema.methods.updateScore = function(action) {
     { name: 'Legend', min: 500000, max: 999999 },
     { name: 'Mythic', min: 1000000, max: 1000000 }
   ];
-  
+
   for (const rank of rankThresholds) {
     if (this.score >= rank.min) {
       this.rank = rank.name;
@@ -540,12 +551,12 @@ userSchema.methods.updateScore = function(action) {
       break;
     }
   }
-  
+
   return this;
 };
 
 // Helper method to get next rank information
-userSchema.methods.getNextRankInfo = function() {
+userSchema.methods.getNextRankInfo = function () {
   const rankThresholds = [
     { name: 'Rookie', next: 'Bronze', threshold: 1000, color: '#9ca3af', icon: '🌱' },
     { name: 'Bronze', next: 'Silver', threshold: 5000, color: '#b45309', icon: '🥉' },
@@ -558,13 +569,13 @@ userSchema.methods.getNextRankInfo = function() {
     { name: 'Legend', next: 'Mythic', threshold: 1000000, color: '#f59e0b', icon: '🔥' },
     { name: 'Mythic', next: null, threshold: null, color: '#f97316', icon: '🌟' }
   ];
-  
+
   const currentRankIndex = rankThresholds.findIndex(r => r.name === this.rank);
   return rankThresholds[currentRankIndex] || rankThresholds[0];
 };
 
 // Calculate progress to next rank
-userSchema.methods.getRankProgress = function() {
+userSchema.methods.getRankProgress = function () {
   const rankThresholds = [
     { min: 0, max: 999 },
     { min: 1000, max: 4999 },
@@ -577,69 +588,69 @@ userSchema.methods.getRankProgress = function() {
     { min: 500000, max: 999999 },
     { min: 1000000, max: 1000000 }
   ];
-  
+
   const rankIndex = ['Rookie', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Master', 'Grandmaster', 'Legend', 'Mythic']
     .indexOf(this.rank);
-  
+
   if (rankIndex === -1) return 0;
-  
+
   const current = rankThresholds[rankIndex];
-  
+
   // For Mythic rank (max)
   if (this.rank === 'Mythic') {
     return 100;
   }
-  
+
   const nextThreshold = rankThresholds[rankIndex + 1]?.min || current.max;
   const progress = ((this.score - current.min) / (nextThreshold - current.min)) * 100;
-  
+
   return Math.min(100, Math.max(0, progress));
 };
 
 // ========== PRIVACY CHECK METHODS ==========
-userSchema.methods.canViewProfile = function(viewer) {
+userSchema.methods.canViewProfile = function (viewer) {
   if (!viewer) return this.privacySettings.profileVisibility === 'public';
-  
+
   const visibility = this.privacySettings.profileVisibility;
-  
+
   if (viewer._id.toString() === this._id.toString()) return true;
   if (visibility === 'public') return true;
   if (visibility === 'private') return false;
   if (visibility === 'followers_only') {
     return this.followers.includes(viewer._id);
   }
-  
+
   return false;
 };
 
-userSchema.methods.canMessageUser = function(sender) {
+userSchema.methods.canMessageUser = function (sender) {
   if (!sender) return false;
-  
+
   const messageSetting = this.privacySettings.allowMessagesFrom;
-  
+
   if (messageSetting === 'everyone') return true;
   if (messageSetting === 'nobody') return false;
   if (messageSetting === 'followers_only') {
     return this.followers.includes(sender._id);
   }
-  
+
   return false;
 };
 
 // ========== STATIC METHODS ==========
-userSchema.statics.emailExists = async function(email) {
+userSchema.statics.emailExists = async function (email) {
   const user = await this.findOne({ email });
   return !!user;
 };
 
-userSchema.statics.usernameExists = async function(username) {
+userSchema.statics.usernameExists = async function (username) {
   const user = await this.findOne({ username });
   return !!user;
 };
 
-userSchema.statics.search = async function(query, currentUserId, limit = 20) {
+userSchema.statics.search = async function (query, currentUserId, limit = 20) {
   const regex = new RegExp(query, 'i');
-  
+
   return await this.find({
     $and: [
       {
@@ -653,32 +664,32 @@ userSchema.statics.search = async function(query, currentUserId, limit = 20) {
       { isActive: true }
     ]
   })
-  .select('username name profilePicture bio followers rank score lastSeen')
-  .limit(limit)
-  .lean();
+    .select('username name profilePicture bio followers rank score lastSeen')
+    .limit(limit)
+    .lean();
 };
 
-userSchema.statics.getSuggestions = async function(userId, limit = 5) {
+userSchema.statics.getSuggestions = async function (userId, limit = 5) {
   const user = await this.findById(userId).select('following');
-  
+
   if (!user) return [];
-  
+
   const following = user.following || [];
-  
+
   return await this.find({
-    _id: { 
-      $nin: [...following, userId] 
+    _id: {
+      $nin: [...following, userId]
     },
     isActive: true
   })
-  .select('username name profilePicture bio followers rank score lastSeen')
-  .sort({ score: -1, followers: -1 })
-  .limit(limit)
-  .lean();
+    .select('username name profilePicture bio followers rank score lastSeen')
+    .sort({ score: -1, followers: -1 })
+    .limit(limit)
+    .lean();
 };
 
 // ========== NEW: Clean up stale push subscriptions ==========
-userSchema.statics.cleanupStaleSubscriptions = async function(daysOld = 30) {
+userSchema.statics.cleanupStaleSubscriptions = async function (daysOld = 30) {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - daysOld);
 

@@ -90,5 +90,15 @@ const messageSchema = new mongoose.Schema({
 messageSchema.index({ conversation: 1, createdAt: -1 });
 messageSchema.index({ sender: 1, createdAt: -1 });
 messageSchema.index({ 'readBy.user': 1 });
+// In backend/models/Message.js
 
+
+
+// ========== INDEXES FOR PERFORMANCE ==========
+messageSchema.index({ conversation: 1, createdAt: -1 }); // For loading messages in a conversation
+messageSchema.index({ sender: 1, createdAt: -1 }); // For user's message history
+messageSchema.index({ 'readBy.user': 1 }); // For read receipts
+messageSchema.index({ contentType: 1, conversation: 1 }); // For media filtering
+messageSchema.index({ isDeleted: 1, createdAt: -1 }); // For cleanup queries
+messageSchema.index({ conversation: 1, createdAt: 1 }); // For forward/backward pagination
 module.exports = mongoose.model('Message', messageSchema);
