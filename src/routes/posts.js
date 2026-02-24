@@ -313,6 +313,16 @@ router.get('/tag/:tag', [
  * @desc    Get authenticated user's feed
  * @access  Private
  */
+// ========== PROTECTED ROUTES ==========
+
+/**
+ * @route   GET /api/posts
+ * @desc    Get authenticated user's feed with feed type support
+ * @query   page - Page number
+ * @query   limit - Posts per page
+ * @query   feedType - 'mixed', 'following', or 'public'
+ * @access  Private
+ */
 router.get('/', protect, asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id).select('following');
   if (!user) {
@@ -324,28 +334,66 @@ router.get('/', protect, asyncHandler(async (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
   const skip = (page - 1) * limit;
 
-  const query = {
-    isHidden: false,
-    $or: [
-      { author: { $in: following } },
-      { visibility: 'public' }
-    ]
-  };
+  // Get feed type from query params (default to 'mixed')
+  const { feedType = 'mixed' } = req.query;
 
-  const [posts, total] = await Promise.all([
-    Post.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('author', 'username profilePicture')
-      .lean(),
-    Post.countDocuments(query)
-  ]);
+  let query = { isHidden: false };
+  let countQuery = { isHidden: false };
+
+  // Apply feed type filters
+  switch (feedType) {
+    case 'following':
+      // Only show posts from users the current user follows and their own posts
+      query.author = { $in: [...following, req.user._id] };
+      query.visibility = { $in: ['public', 'followers'] };
+      countQuery = { ...query };
+      break;
+
+    case 'public':
+      // Only show public posts from users they don't follow
+      query.author = { $nin: [...following, req.user._id] };
+      query.visibility = 'public';
+      countQuery = { ...query };
+      break;
+
+    case 'mixed':
+    default:
+      // Mixed feed: posts from followed users + public posts
+      query = {
+        isHidden: false,
+        $or: [
+          { author: { $in: following }, visibility: { $in: ['public', 'followers'] } },
+          { author: { $nin: [...following, req.user._id] }, visibility: 'public' },
+          { author: req.user._id } // Include user's own posts
+        ]
+      };
+      countQuery = {
+        isHidden: false,
+        $or: [
+          { author: { $in: following }, visibility: { $in: ['public', 'followers'] } },
+          { author: { $nin: [...following, req.user._id] }, visibility: 'public' },
+          { author: req.user._id }
+        ]
+      };
+      break;
+  }
+
+  // Get posts
+  const posts = await Post.find(query)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('author', 'username profilePicture')
+    .lean();
+
+  // Get total count for pagination
+  const total = await Post.countDocuments(countQuery);
 
   const postsWithMedia = posts.map(p => ({
     ...p,
     media: toAbsoluteMedia(req, p.media),
-    isLiked: p.likes?.some(id => id.toString() === req.user._id.toString()) || false
+    isLiked: p.likes?.some(id => id.toString() === req.user._id.toString()) || false,
+    source: getPostSource(p, req.user._id, following)
   }));
 
   res.json({
@@ -360,6 +408,17 @@ router.get('/', protect, asyncHandler(async (req, res) => {
     }
   });
 }));
+
+// Helper function to determine post source
+function getPostSource(post, userId, following) {
+  if (post.author._id.toString() === userId.toString()) {
+    return 'own';
+  }
+  if (following.includes(post.author._id.toString())) {
+    return 'following';
+  }
+  return 'public';
+}
 
 /**
  * @route   GET /api/posts/user/:userId
