@@ -79,78 +79,13 @@ router.get('/health', (req, res) => {
   });
 });
 
-// posts.js - Search routes
-router.get('/search', async (req, res) => {
-  try {
-    const { q, page = 1, limit = 10, type, sort, timeRange } = req.query;
+// ========== PUBLIC ROUTES ==========
 
-    if (!q) {
-      return res.status(400).json({ error: 'Search query required' });
-    }
-
-    const query = {};
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    if (type === 'image') {
-      query['media.mediaType'] = 'image';
-    } else if (type === 'video') {
-      query['media.mediaType'] = 'video';
-    } else if (type === 'post') {
-      query.content = { $exists: true, $ne: '' };
-    }
-
-    if (timeRange !== 'all') {
-      const now = new Date();
-      const ranges = {
-        today: new Date(now.setHours(0, 0, 0, 0)),
-        week: new Date(now.setDate(now.getDate() - 7)),
-        month: new Date(now.setMonth(now.getMonth() - 1)),
-        year: new Date(now.setFullYear(now.getFullYear() - 1))
-      };
-      if (ranges[timeRange]) {
-        query.createdAt = { $gte: ranges[timeRange] };
-      }
-    }
-
-    let sortOptions = {};
-    if (sort === 'recent') {
-      sortOptions = { createdAt: -1 };
-    } else if (sort === 'popular') {
-      sortOptions = { likesCount: -1, commentsCount: -1 };
-    } else if (sort === 'likes') {
-      sortOptions = { likesCount: -1 };
-    } else if (sort === 'comments') {
-      sortOptions = { commentsCount: -1 };
-    } else {
-      sortOptions = { score: { $meta: 'textScore' } };
-    }
-
-    const posts = await Post.find(
-      { $text: { $search: q }, ...query },
-      { score: { $meta: 'textScore' } }
-    )
-      .sort(sortOptions)
-      .skip(skip)
-      .limit(parseInt(limit))
-      .populate('author', 'username name profilePicture rank score');
-
-    const total = await Post.countDocuments({ $text: { $search: q }, ...query });
-
-    res.json({
-      data: posts,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        hasMore: skip + posts.length < total
-      }
-    });
-  } catch (error) {
-    console.error('Search error:', error);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
+/**
+ * @route   GET /api/posts/trending-tags
+ * @desc    Get trending hashtags
+ * @access  Public
+ */
 router.get('/trending-tags', async (req, res) => {
   try {
     const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -183,8 +118,6 @@ router.get('/trending-tags', async (req, res) => {
   }
 });
 
-// ========== PUBLIC ROUTES ==========
-
 /**
  * @route   GET /api/posts/search
  * @desc    Search public posts
@@ -209,7 +142,7 @@ router.get('/search', [
     isHidden: false,
     $or: [
       { content: searchRegex },
-      { hashtags: { $in: [searchRegex] } }
+      { tags: { $in: [searchRegex] } }
     ]
   })
     .sort({ createdAt: -1 })
@@ -223,7 +156,7 @@ router.get('/search', [
     isHidden: false,
     $or: [
       { content: searchRegex },
-      { hashtags: { $in: [searchRegex] } }
+      { tags: { $in: [searchRegex] } }
     ]
   });
 
@@ -289,7 +222,7 @@ router.get('/tag/:tag', [
   const tag = req.params.tag.toLowerCase().trim();
 
   const posts = await Post.find({
-    hashtags: tag,
+    tags: tag,
     visibility: 'public',
     isHidden: false
   })
@@ -310,41 +243,97 @@ router.get('/tag/:tag', [
 
 /**
  * @route   GET /api/posts
- * @desc    Get authenticated user's feed
- * @access  Private
- */
-// ========== PROTECTED ROUTES ==========
-
-/**
- * @route   GET /api/posts
  * @desc    Get authenticated user's feed with feed type support
- * @query   page - Page number
- * @query   limit - Posts per page
- * @query   feedType - 'mixed', 'following', or 'public'
+ * @query   page - Page number (default: 1)
+ * @query   limit - Posts per page (default: 20)
+ * @query   feedType - 'mixed', 'following', or 'public' (default: 'mixed')
  * @access  Private
  */
-// In your frontend/src/services/api.js - update the postsAPI
-export const postsAPI = {
-  getAll: (page = 1, limit = 10, options = {}) => {
-    const params = new URLSearchParams({
-      limit: limit.toString()
-    });
+router.get('/', protect, asyncHandler(async (req, res) => {
+  console.log('📡 GET /api/posts called with query:', req.query);
+  
+  const user = await User.findById(req.user._id).select('following');
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
 
-    // Support both page and cursor
-    if (options.cursor) {
-      params.append('cursor', options.cursor);
-    } else {
-      params.append('page', page.toString());
+  const following = user.following || [];
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const skip = (page - 1) * limit;
+  const { feedType = 'mixed' } = req.query;
+
+  // Build query based on feed type
+  let query = { isHidden: false };
+
+  switch (feedType) {
+    case 'following':
+      // Only show posts from users the current user follows and their own posts
+      query = {
+        isHidden: false,
+        $or: [
+          { author: { $in: following }, visibility: { $in: ['public', 'followers'] } },
+          { author: req.user._id } // Include user's own posts
+        ]
+      };
+      break;
+
+    case 'public':
+      // Only show public posts from users they don't follow
+      query = {
+        isHidden: false,
+        author: { $nin: [...following, req.user._id] },
+        visibility: 'public'
+      };
+      break;
+
+    case 'mixed':
+    default:
+      // Mixed feed: posts from followed users + public posts + own posts
+      query = {
+        isHidden: false,
+        $or: [
+          { author: { $in: following }, visibility: { $in: ['public', 'followers'] } },
+          { author: { $nin: [...following, req.user._id] }, visibility: 'public' },
+          { author: req.user._id }
+        ]
+      };
+      break;
+  }
+
+  // Get posts
+  const posts = await Post.find(query)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('author', 'username profilePicture')
+    .lean();
+
+  // Get total count for pagination
+  const total = await Post.countDocuments(query);
+
+  console.log(`✅ Found ${posts.length} posts for feed type: ${feedType}`);
+
+  // Add media URLs and like status
+  const postsWithMedia = posts.map(p => ({
+    ...p,
+    media: toAbsoluteMedia(req, p.media),
+    isLiked: p.likes?.some(id => id.toString() === req.user._id.toString()) || false,
+    source: getPostSource(p, req.user._id, following)
+  }));
+
+  res.json({
+    success: true,
+    data: postsWithMedia,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      hasMore: skip + posts.length < total
     }
-
-    if (options.feedType) {
-      params.append('feedType', options.feedType);
-    }
-
-    return api.get(`/posts?${params.toString()}`);
-  },
-  // ... rest of your postsAPI methods
-};
+  });
+}));
 
 // Helper function to determine post source
 function getPostSource(post, userId, following) {
@@ -971,210 +960,6 @@ router.get('/:id/viewers', protect, async (req, res) => {
   }
 });
 
-// ========== UPDATED POSTS ROUTE WITH PROPER VIEWS ==========
-
-/**
- * @route   GET /api/posts
- * @desc    Get feed with customizable distribution
- * @query   followingRatio - Percentage from following (default: 60)
- * @query   mixStrategy - 'balanced', 'chronological', or 'weighted'
- * @access  Private
- */
-router.get('/', protect, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select('following');
-  if (!user) {
-    return res.status(404).json({ success: false, message: 'User not found' });
-  }
-
-  const following = user.following || [];
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 20;
-
-  // Customizable ratio (default 60%)
-  const followingRatio = parseInt(req.query.followingRatio) || 60;
-  const followingCount = Math.floor(limit * (followingRatio / 100));
-  const publicCount = limit - followingCount;
-
-  // Mix strategy
-  const mixStrategy = req.query.mixStrategy || 'weighted';
-
-  // Get user's own posts (always included, doesn't count towards ratio)
-  const userPosts = await Post.find({
-    author: req.user._id,
-    isHidden: false
-  })
-    .sort({ createdAt: -1 })
-    .limit(3)
-    .populate('author', 'username profilePicture')
-    .lean();
-
-  // Get posts from followed users
-  const followingPosts = await Post.find({
-    author: { $in: following },
-    isHidden: false,
-    visibility: { $in: ['public', 'followers'] }
-  })
-    .sort({ createdAt: -1 })
-    .skip(Math.max(0, (page - 1) * followingCount))
-    .limit(followingCount)
-    .populate('author', 'username profilePicture')
-    .lean();
-
-  // Get public posts
-  const publicPosts = await Post.find({
-    author: { $nin: [...following, req.user._id] },
-    visibility: 'public',
-    isHidden: false
-  })
-    .sort({ createdAt: -1 })
-    .skip(Math.max(0, (page - 1) * publicCount))
-    .limit(publicCount)
-    .populate('author', 'username profilePicture')
-    .lean();
-
-  // Mix posts based on strategy
-  let mixedPosts = [];
-
-  switch (mixStrategy) {
-    case 'chronological':
-      mixedPosts = [...userPosts, ...followingPosts, ...publicPosts]
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      break;
-
-    case 'balanced':
-      mixedPosts = interleavePosts(userPosts, followingPosts, publicPosts);
-      break;
-
-    case 'weighted':
-    default:
-      mixedPosts = weightedShuffle([...userPosts, ...followingPosts, ...publicPosts]);
-      break;
-  }
-
-  // Track views
-  const viewPromises = mixedPosts.map(post => {
-    if (post.author._id.toString() !== req.user._id.toString()) {
-      return Post.findById(post._id).then(p => p.addView(req.user._id));
-    }
-    return Promise.resolve();
-  });
-  Promise.allSettled(viewPromises).catch(console.error);
-
-  const postsWithMedia = mixedPosts.map(p => ({
-    ...p,
-    media: toAbsoluteMedia(req, p.media),
-    isLiked: p.likes?.some(id => id.toString() === req.user._id.toString()) || false,
-    hasViewed: p.views?.some(v => v.user.toString() === req.user._id.toString()) || false
-  }));
-
-  // Get totals for pagination
-  const [followingTotal, publicTotal] = await Promise.all([
-    Post.countDocuments({ author: { $in: following }, isHidden: false }),
-    Post.countDocuments({ author: { $nin: [...following, req.user._id] }, visibility: 'public', isHidden: false })
-  ]);
-
-  const total = followingTotal + publicTotal;
-  const totalPages = Math.ceil(total / limit);
-
-  res.json({
-    success: true,
-    data: postsWithMedia,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages,
-      distribution: {
-        following: followingPosts.length,
-        public: publicPosts.length,
-        own: userPosts.length,
-        ratio: followingRatio
-      },
-      hasMore: page < totalPages
-    }
-  });
-}));
-
-// Helper function to interleave posts
-function interleavePosts(own, following, public_) {
-  const result = [];
-  const maxLength = Math.max(own.length, following.length, public_.length);
-
-  for (let i = 0; i < maxLength; i++) {
-    if (i < own.length) result.push(own[i]);
-
-    for (let j = 0; j < 3; j++) {
-      const followingIndex = i * 3 + j;
-      if (followingIndex < following.length) {
-        result.push(following[followingIndex]);
-      }
-    }
-
-    for (let j = 0; j < 2; j++) {
-      const publicIndex = i * 2 + j;
-      if (publicIndex < public_.length) {
-        result.push(public_[publicIndex]);
-      }
-    }
-  }
-
-  return result;
-}
-
-/**
- * @route   GET /api/posts/analytics/:id
- * @desc    Get post analytics (owner only)
- * @access  Private
- */
-router.get('/analytics/:id', protect, [
-  param('id').isMongoId()
-], asyncHandler(async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ success: false, errors: errors.array() });
-  }
-
-  const post = await Post.findById(req.params.id)
-    .populate('views.user', 'username profilePicture')
-    .populate('likes', 'username profilePicture');
-
-  if (!post) {
-    return res.status(404).json({ success: false, message: 'Post not found' });
-  }
-
-  if (post.author.toString() !== req.user._id.toString()) {
-    return res.status(403).json({ success: false, message: 'Not authorized' });
-  }
-
-  const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const recentViews = post.views?.filter(v => v.viewedAt > last7Days) || [];
-
-  const viewsByDay = {};
-  post.views?.forEach(view => {
-    const day = view.viewedAt.toISOString().split('T')[0];
-    viewsByDay[day] = (viewsByDay[day] || 0) + 1;
-  });
-
-  res.json({
-    success: true,
-    data: {
-      totalViews: post.viewsCount,
-      uniqueViewers: post.uniqueViewers,
-      totalLikes: post.likesCount,
-      recentViews: recentViews.length,
-      viewsByDay,
-      recentViewers: post.views
-        ?.sort((a, b) => b.viewedAt - a.viewedAt)
-        .slice(0, 10)
-        .map(v => ({
-          user: v.user,
-          viewedAt: v.viewedAt
-        })),
-      topLikers: post.likes?.slice(0, 10)
-    }
-  });
-}));
-
 // ========== REELS/VIDEO ENDPOINTS ==========
 
 /**
@@ -1234,7 +1019,7 @@ router.get('/videos/random', [
       $project: {
         content: 1,
         media: 1,
-        hashtags: 1,
+        tags: 1,
         likesCount: 1,
         commentsCount: 1,
         viewsCount: 1,
@@ -1453,12 +1238,12 @@ router.get('/videos/recommended', protect, [
     likes: req.user._id,
     'media.mediaType': 'video'
   })
-    .select('hashtags author')
+    .select('tags author')
     .limit(50)
     .lean();
 
   const followedUsers = req.user.following || [];
-  const likedHashtags = userLikedPosts.flatMap(p => p.hashtags || []);
+  const likedTags = userLikedPosts.flatMap(p => p.tags || []);
   const likedAuthors = userLikedPosts.map(p => p.author);
 
   const recommendationQuery = {
@@ -1468,12 +1253,12 @@ router.get('/videos/recommended', protect, [
     author: { $ne: req.user._id },
     $or: [
       ...(followedUsers.length ? [{ author: { $in: followedUsers } }] : []),
-      ...(likedHashtags.length ? [{ hashtags: { $in: likedHashtags } }] : []),
+      ...(likedTags.length ? [{ tags: { $in: likedTags } }] : []),
       ...(likedAuthors.length ? [{ author: { $in: likedAuthors } }] : [])
     ]
   };
 
-  if (followedUsers.length === 0 && likedHashtags.length === 0 && likedAuthors.length === 0) {
+  if (followedUsers.length === 0 && likedTags.length === 0 && likedAuthors.length === 0) {
     return res.redirect(`/api/posts/videos/random?page=${page}&limit=${limit}`);
   }
 
