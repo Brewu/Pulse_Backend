@@ -108,6 +108,13 @@ const checkCommentOwnership = asyncHandler(async (req, res, next) => {
  * @desc    Get comments for a post (with pagination)
  * @access  Public
  */
+// ========== PUBLIC ROUTES ==========
+
+/**
+ * @route   GET /api/comments/post/:postId
+ * @desc    Get comments for a post (with pagination)
+ * @access  Public
+ */
 router.get('/post/:postId', [
   param('postId').isMongoId().withMessage('Invalid post ID'),
   query('page').optional().isInt({ min: 1 }).toInt(),
@@ -123,40 +130,103 @@ router.get('/post/:postId', [
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const includeReplies = req.query.includeReplies === 'true';
+  const skip = (page - 1) * limit;
 
-  const result = await Comment.getByPostOptimized(postId, page, limit, includeReplies);
-
-  // Add isLiked flag for authenticated users
-  const addIsLikedRecursively = (comments, userId) => {
-    return comments.map(comment => {
-      const updated = {
-        ...comment,
-        isLiked: comment.likes?.some(id => id.toString() === userId) || false
-      };
-
-      if (comment.replies?.length) {
-        updated.replies = addIsLikedRecursively(comment.replies, userId);
-      }
-
-      return updated;
-    });
-  };
-
-  if (req.user) {
-    result.comments = addIsLikedRecursively(result.comments, req.user.id);
-  }
-
-  res.json({
-    success: true,
-    data: result.comments,
-    pagination: {
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      totalPages: result.totalPages,
-      hasMore: result.page < result.totalPages
+  try {
+    // First, verify the post exists
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
     }
-  });
+
+    // Build query for top-level comments (no parent)
+    const query = {
+      post: postId,
+      parentComment: null,
+      isHidden: false
+    };
+
+    // Get total count for pagination
+    const total = await Comment.countDocuments(query);
+
+    // Get top-level comments
+    let comments = await Comment.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('author', 'username profilePicture')
+      .lean();
+
+    // If includeReplies is true, fetch replies for each comment
+    if (includeReplies && comments.length > 0) {
+      const commentIds = comments.map(c => c._id);
+
+      const replies = await Comment.find({
+        parentComment: { $in: commentIds },
+        isHidden: false
+      })
+        .sort({ createdAt: 1 })
+        .populate('author', 'username profilePicture')
+        .lean();
+
+      // Group replies by parent comment
+      const repliesByParent = replies.reduce((acc, reply) => {
+        const parentId = reply.parentComment.toString();
+        if (!acc[parentId]) acc[parentId] = [];
+        acc[parentId].push(reply);
+        return acc;
+      }, {});
+
+      // Attach replies to their parent comments
+      comments = comments.map(comment => ({
+        ...comment,
+        replies: repliesByParent[comment._id.toString()] || [],
+        repliesCount: repliesByParent[comment._id.toString()]?.length || 0
+      }));
+    }
+
+    // Add isLiked flag for authenticated users
+    const addIsLikedRecursively = (commentsList, userId) => {
+      return commentsList.map(comment => {
+        const updated = {
+          ...comment,
+          isLiked: comment.likes?.some(id => id.toString() === userId) || false
+        };
+
+        if (comment.replies?.length) {
+          updated.replies = addIsLikedRecursively(comment.replies, userId);
+        }
+
+        return updated;
+      });
+    };
+
+    if (req.user) {
+      comments = addIsLikedRecursively(comments, req.user.id);
+    }
+
+    res.json({
+      success: true,
+      data: comments,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + comments.length < total
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch comments',
+      error: error.message
+    });
+  }
 }));
 
 /**
