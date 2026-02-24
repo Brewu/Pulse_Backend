@@ -654,6 +654,109 @@ router.put('/:id', protect, [
  * @desc    Like a post
  * @access  Private
  */
+// =============================================
+// TRACK POST VIEW
+// =============================================
+router.post('/:id/view', protect, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Don't track views on own posts
+    if (post.author.toString() === req.user.id) {
+      return res.json({
+        success: true,
+        message: 'Own post view not tracked'
+      });
+    }
+
+    // Check if user already viewed in last 24 hours
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const existingView = post.views?.find(v =>
+      v.user.toString() === req.user.id &&
+      v.viewedAt > oneDayAgo
+    );
+
+    if (!existingView) {
+      // Add new view
+      post.views = post.views || [];
+      post.views.push({
+        user: req.user.id,
+        viewedAt: new Date()
+      });
+      post.viewsCount = post.views.length;
+      await post.save();
+
+      // Update user's score (optional)
+      await User.findByIdAndUpdate(post.author, {
+        $inc: { score: 1 } // Small increment for views
+      });
+    }
+
+    res.json({
+      success: true,
+      viewsCount: post.viewsCount,
+      hasViewed: true
+    });
+
+  } catch (error) {
+    console.error('Error tracking view:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to track view'
+    });
+  }
+});
+
+// =============================================
+// GET POST VIEWERS (for post owner)
+// =============================================
+router.get('/:id/viewers', protect, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id)
+      .populate('views.user', 'username profilePicture');
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Only post owner can see viewers
+    if (post.author.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view post viewers'
+      });
+    }
+
+    const viewers = (post.views || [])
+      .sort((a, b) => b.viewedAt - a.viewedAt)
+      .map(view => ({
+        user: view.user,
+        viewedAt: view.viewedAt
+      }));
+
+    res.json({
+      success: true,
+      data: viewers
+    });
+
+  } catch (error) {
+    console.error('Error fetching viewers:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch viewers'
+    });
+  }
+});
 router.post('/:id/like', protect,
   [
     param('id').isMongoId()
