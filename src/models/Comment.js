@@ -58,20 +58,12 @@ const commentSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Virtual for replies
+// ========== VIRTUALS ==========
 commentSchema.virtual('replies', {
   ref: 'Comment',
   localField: '_id',
   foreignField: 'parentComment'
 });
-
-// Indexes
-commentSchema.index({ post: 1, createdAt: -1 });
-commentSchema.index({ author: 1, createdAt: -1 });
-commentSchema.index({ parentComment: 1 });
-// In backend/models/Comment.js
-
-
 
 // ========== INDEXES FOR PERFORMANCE ==========
 commentSchema.index({ post: 1, createdAt: -1 }); // For post comments
@@ -81,7 +73,6 @@ commentSchema.index({ likes: 1 }); // For liked comments
 commentSchema.index({ isHidden: 1, createdAt: -1 }); // For moderation
 commentSchema.index({ post: 1, parentComment: { $exists: true }, createdAt: -1 }); // For replies count
 
-module.exports = mongoose.model('Comment', commentSchema);
 // ========== PRE-SAVE MIDDLEWARE ==========
 commentSchema.pre('save', function () {
   if (this.isModified('content') && !this.isNew) {
@@ -94,7 +85,42 @@ commentSchema.pre('save', function () {
   }
 });
 
-// ========== LIKE METHODS ==========
+// ========== PRE-VALIDATE MIDDLEWARE ==========
+commentSchema.pre('validate', function () {
+  if (this.media && this.media.length > 0) {
+    this.media = this.media.filter(m => m.url && m.url.trim().length > 0);
+  }
+});
+
+// ========== POST-SAVE MIDDLEWARE ==========
+commentSchema.post('save', async function (doc) {
+  if (doc.parentComment) {
+    try {
+      await mongoose.model('Comment').findByIdAndUpdate(
+        doc.parentComment,
+        { $inc: { repliesCount: 1 } }
+      );
+    } catch (error) {
+      console.error('Error updating parent repliesCount:', error);
+    }
+  }
+});
+
+// ========== POST-REMOVE MIDDLEWARE ==========
+commentSchema.post('remove', async function (doc) {
+  if (doc.parentComment) {
+    try {
+      await mongoose.model('Comment').findByIdAndUpdate(
+        doc.parentComment,
+        { $inc: { repliesCount: -1 } }
+      );
+    } catch (error) {
+      console.error('Error updating parent repliesCount:', error);
+    }
+  }
+});
+
+// ========== INSTANCE METHODS ==========
 commentSchema.methods.addLike = async function (userId) {
   if (!userId) return this;
 
@@ -150,35 +176,11 @@ commentSchema.methods.isLikedBy = function (userId) {
   return this.likes.some(id => id.toString() === userId.toString());
 };
 
-// ========== POST-SAVE MIDDLEWARE ==========
-commentSchema.post('save', async function (doc) {
-  if (doc.parentComment) {
-    try {
-      await mongoose.model('Comment').findByIdAndUpdate(
-        doc.parentComment,
-        { $inc: { repliesCount: 1 } }
-      );
-    } catch (error) {
-      console.error('Error updating parent repliesCount:', error);
-    }
-  }
-});
-
-commentSchema.post('remove', async function (doc) {
-  if (doc.parentComment) {
-    try {
-      await mongoose.model('Comment').findByIdAndUpdate(
-        doc.parentComment,
-        { $inc: { repliesCount: -1 } }
-      );
-    } catch (error) {
-      console.error('Error updating parent repliesCount:', error);
-    }
-  }
-});
-
 // ========== STATIC METHODS ==========
-// ========== STATIC METHODS ==========
+
+/**
+ * Get comments for a post with optimized pagination
+ */
 commentSchema.statics.getByPostOptimized = async function (postId, page = 1, limit = 20, includeReplies = false) {
   const skip = (page - 1) * limit;
 
@@ -251,8 +253,9 @@ commentSchema.statics.getByPostOptimized = async function (postId, page = 1, lim
   };
 };
 
-// ========== STATIC METHODS ==========
-// ========== STATIC METHODS ==========
+/**
+ * Delete a comment and all its replies recursively
+ */
 commentSchema.statics.deleteWithReplies = async function (commentId) {
   const Comment = this;
 
@@ -299,11 +302,5 @@ commentSchema.statics.deleteWithReplies = async function (commentId) {
   }
 };
 
-// ========== VALIDATION ==========
-commentSchema.pre('validate', function () {
-  if (this.media && this.media.length > 0) {
-    this.media = this.media.filter(m => m.url && m.url.trim().length > 0);
-  }
-});
-
+// ========== EXPORT ==========
 module.exports = mongoose.models.Comment || mongoose.model('Comment', commentSchema);
