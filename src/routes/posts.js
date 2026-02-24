@@ -7,18 +7,18 @@ const { protect } = require('../middleware/auth');
 const NotificationMiddleware = require('../middleware/NotificationMiddleware');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
+
 // ========== PUSH NOTIFICATION HELPER ==========
 const sendPushNotification = async (userId, notificationData) => {
   try {
-    // Don't send if no userId
     if (!userId) return;
-
     const pushService = require('../services/pushNotificationService');
     await pushService.sendToUser(userId, notificationData);
   } catch (error) {
     console.error('Error sending push notification:', error);
   }
 };
+
 // ========== SAFE MODEL IMPORTS ==========
 let Post, User;
 
@@ -78,7 +78,8 @@ router.get('/health', (req, res) => {
     dbState: mongoose.connection.readyState
   });
 });
-// posts.js - Add these routes
+
+// posts.js - Search routes
 router.get('/search', async (req, res) => {
   try {
     const { q, page = 1, limit = 10, type, sort, timeRange } = req.query;
@@ -90,17 +91,14 @@ router.get('/search', async (req, res) => {
     const query = {};
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Text search on content and tags
     if (type === 'image') {
       query['media.mediaType'] = 'image';
     } else if (type === 'video') {
       query['media.mediaType'] = 'video';
     } else if (type === 'post') {
-      // Only text posts
       query.content = { $exists: true, $ne: '' };
     }
 
-    // Time range filter
     if (timeRange !== 'all') {
       const now = new Date();
       const ranges = {
@@ -114,7 +112,6 @@ router.get('/search', async (req, res) => {
       }
     }
 
-    // Build sort options
     let sortOptions = {};
     if (sort === 'recent') {
       sortOptions = { createdAt: -1 };
@@ -125,7 +122,6 @@ router.get('/search', async (req, res) => {
     } else if (sort === 'comments') {
       sortOptions = { commentsCount: -1 };
     } else {
-      // Relevance scoring
       sortOptions = { score: { $meta: 'textScore' } };
     }
 
@@ -438,16 +434,6 @@ router.get('/user/:userId', [
  * @desc    Create a new post
  * @access  Private
  */
-/**
- * @route   POST /api/posts
- * @desc    Create a new post
- * @access  Private
- */
-/**
- * @route   POST /api/posts
- * @desc    Create a new post
- * @access  Private
- */
 router.post(
   '/',
   protect,
@@ -524,6 +510,64 @@ router.post(
     await post.populate('author', 'username profilePicture');
 
     console.log('Created post with media edits:', post.media.map(m => m.edits));
+
+    // ========== 🔥 REAL-TIME UPDATE ==========
+    // Emit to all connected clients
+    if (req.io) {
+      req.io.emit('post:new', {
+        post,
+        message: 'New post created'
+      });
+    }
+
+    // ========== 🔔 NOTIFY FOLLOWERS ==========
+    setImmediate(async () => {
+      try {
+        // Find users who follow this author
+        const followers = await User.find({
+          following: req.user._id,
+          'notificationPreferences.types.post_created': { $ne: false }
+        }).select('_id');
+
+        console.log(`📢 Notifying ${followers.length} followers about new post`);
+
+        // Send push notification to each follower
+        for (const follower of followers) {
+          const notificationData = {
+            title: '📝 New Post',
+            body: `${req.user.username} just posted: ${post.content?.substring(0, 50)}${post.content?.length > 50 ? '...' : ''}`,
+            type: 'post_created',
+            icon: '/icons/post-icon.png',
+            badge: '/badge-post.png',
+            data: {
+              url: `/posts/${post._id}`,
+              postId: post._id,
+              authorId: req.user._id,
+              authorUsername: req.user.username,
+              authorProfilePicture: req.user.profilePicture,
+              postPreview: post.content?.substring(0, 100),
+              hasMedia: post.media?.length > 0,
+              timestamp: new Date().toISOString()
+            },
+            actions: [
+              {
+                action: 'view',
+                title: 'View Post'
+              },
+              {
+                action: 'dismiss',
+                title: 'Dismiss'
+              }
+            ]
+          };
+
+          // Send push notification
+          sendPushNotification(follower._id, notificationData).catch(console.error);
+        }
+      } catch (error) {
+        console.error('Error notifying followers:', error);
+      }
+    });
 
     res.status(201).json({
       success: true,
@@ -634,6 +678,20 @@ router.put('/:id', protect, [
   await post.save();
   await post.populate('author', 'username profilePicture');
 
+  // 🔥 Emit post update
+  if (req.io) {
+    req.io.emit('post:updated', {
+      postId: post._id,
+      updates: {
+        content: post.content,
+        visibility: post.visibility,
+        hashtags: post.hashtags,
+        isEdited: post.isEdited,
+        editedAt: post.editedAt
+      }
+    });
+  }
+
   res.json({
     success: true,
     data: {
@@ -649,114 +707,6 @@ router.put('/:id', protect, [
  * @desc    Like a post
  * @access  Private
  */
-/**
- * @route   POST /api/posts/:id/like
- * @desc    Like a post
- * @access  Private
- */
-// =============================================
-// TRACK POST VIEW
-// =============================================
-router.post('/:id/view', protect, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        message: 'Post not found'
-      });
-    }
-
-    // Don't track views on own posts
-    if (post.author.toString() === req.user.id) {
-      return res.json({
-        success: true,
-        message: 'Own post view not tracked'
-      });
-    }
-
-    // Check if user already viewed in last 24 hours
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const existingView = post.views?.find(v =>
-      v.user.toString() === req.user.id &&
-      v.viewedAt > oneDayAgo
-    );
-
-    if (!existingView) {
-      // Add new view
-      post.views = post.views || [];
-      post.views.push({
-        user: req.user.id,
-        viewedAt: new Date()
-      });
-      post.viewsCount = post.views.length;
-      await post.save();
-
-      // Update user's score (optional)
-      await User.findByIdAndUpdate(post.author, {
-        $inc: { score: 1 } // Small increment for views
-      });
-    }
-
-    res.json({
-      success: true,
-      viewsCount: post.viewsCount,
-      hasViewed: true
-    });
-
-  } catch (error) {
-    console.error('Error tracking view:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to track view'
-    });
-  }
-});
-
-// =============================================
-// GET POST VIEWERS (for post owner)
-// =============================================
-router.get('/:id/viewers', protect, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id)
-      .populate('views.user', 'username profilePicture');
-
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        message: 'Post not found'
-      });
-    }
-
-    // Only post owner can see viewers
-    if (post.author.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view post viewers'
-      });
-    }
-
-    const viewers = (post.views || [])
-      .sort((a, b) => b.viewedAt - a.viewedAt)
-      .map(view => ({
-        user: view.user,
-        viewedAt: view.viewedAt
-      }));
-
-    res.json({
-      success: true,
-      data: viewers
-    });
-
-  } catch (error) {
-    console.error('Error fetching viewers:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch viewers'
-    });
-  }
-});
 router.post('/:id/like', protect,
   [
     param('id').isMongoId()
@@ -788,13 +738,23 @@ router.post('/:id/like', protect,
 
     await post.addLike(req.user._id);
 
+    // 🔥 Emit like update
+    if (req.io) {
+      req.io.emit('post:liked', {
+        postId: post._id,
+        userId: req.user._id,
+        likesCount: post.likesCount,
+        action: 'like'
+      });
+    }
+
     // 🔔 Send rich push notification to post author (if not self-like)
     if (post.author._id.toString() !== req.user._id.toString()) {
       const notificationData = {
         title: '❤️ New Like',
         body: `${req.user.username} liked your post`,
         type: 'like',
-        icon: '/icons/like-icon.png', // Custom icon for likes
+        icon: '/icons/like-icon.png',
         badge: '/badge-like.png',
         data: {
           url: `/posts/${post._id}`,
@@ -807,7 +767,7 @@ router.post('/:id/like', protect,
         }
       };
 
-      // Send push notification asynchronously (don't await)
+      // Send push notification asynchronously
       sendPushNotification(post.author._id, notificationData).catch(console.error);
     }
 
@@ -843,6 +803,16 @@ router.post('/:id/unlike', protect, [
   }
 
   await post.removeLike(req.user._id);
+
+  // 🔥 Emit unlike update
+  if (req.io) {
+    req.io.emit('post:liked', {
+      postId: post._id,
+      userId: req.user._id,
+      likesCount: post.likesCount,
+      action: 'unlike'
+    });
+  }
 
   res.json({
     success: true,
@@ -884,42 +854,129 @@ router.delete('/:id', protect, [
 
   await post.deleteOne();
 
+  // 🔥 Emit post deletion
+  if (req.io) {
+    req.io.emit('post:deleted', {
+      postId: post._id,
+      userId: req.user._id
+    });
+  }
+
   res.json({ success: true, message: 'Post deleted' });
 }));
 
-// ========== ERROR HANDLING ==========
-router.use((err, req, res, next) => {
-  console.error('Posts Route Error:', {
-    path: req.path,
-    method: req.method,
-    error: err.message,
-    stack: err.stack
-  });
+// ========== VIEW TRACKING ==========
 
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, message: 'File too large (max 10MB)' });
+/**
+ * @route   POST /api/posts/:id/view
+ * @desc    Track post view
+ * @access  Private
+ */
+router.post('/:id/view', protect, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
     }
-    return res.status(400).json({ success: false, message: err.message });
-  }
 
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Server error'
-  });
+    // Don't track views on own posts
+    if (post.author.toString() === req.user.id) {
+      return res.json({
+        success: true,
+        message: 'Own post view not tracked'
+      });
+    }
+
+    // Check if user already viewed in last 24 hours
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const existingView = post.views?.find(v =>
+      v.user.toString() === req.user.id &&
+      v.viewedAt > oneDayAgo
+    );
+
+    if (!existingView) {
+      // Add new view
+      post.views = post.views || [];
+      post.views.push({
+        user: req.user.id,
+        viewedAt: new Date()
+      });
+      post.viewsCount = post.views.length;
+      await post.save();
+
+      // Update user's score (optional)
+      await User.findByIdAndUpdate(post.author, {
+        $inc: { score: 1 }
+      });
+    }
+
+    res.json({
+      success: true,
+      viewsCount: post.viewsCount,
+      hasViewed: true
+    });
+
+  } catch (error) {
+    console.error('Error tracking view:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to track view'
+    });
+  }
 });
+
+/**
+ * @route   GET /api/posts/:id/viewers
+ * @desc    Get post viewers (for post owner)
+ * @access  Private
+ */
+router.get('/:id/viewers', protect, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id)
+      .populate('views.user', 'username profilePicture');
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Only post owner can see viewers
+    if (post.author.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view post viewers'
+      });
+    }
+
+    const viewers = (post.views || [])
+      .sort((a, b) => b.viewedAt - a.viewedAt)
+      .map(view => ({
+        user: view.user,
+        viewedAt: view.viewedAt
+      }));
+
+    res.json({
+      success: true,
+      data: viewers
+    });
+
+  } catch (error) {
+    console.error('Error fetching viewers:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch viewers'
+    });
+  }
+});
+
 // ========== UPDATED POSTS ROUTE WITH PROPER VIEWS ==========
 
-/**
- * @route   GET /api/posts
- * @desc    Get authenticated user's feed
- * @access  Private
- */
-/**
- * @route   GET /api/posts
- * @desc    Get authenticated user's feed
- * @access  Private
- */
 /**
  * @route   GET /api/posts
  * @desc    Get feed with customizable distribution
@@ -943,7 +1000,7 @@ router.get('/', protect, asyncHandler(async (req, res) => {
   const publicCount = limit - followingCount;
 
   // Mix strategy
-  const mixStrategy = req.query.mixStrategy || 'weighted'; // 'balanced', 'chronological', 'weighted'
+  const mixStrategy = req.query.mixStrategy || 'weighted';
 
   // Get user's own posts (always included, doesn't count towards ratio)
   const userPosts = await Post.find({
@@ -951,7 +1008,7 @@ router.get('/', protect, asyncHandler(async (req, res) => {
     isHidden: false
   })
     .sort({ createdAt: -1 })
-    .limit(3) // Max 3 user posts per page
+    .limit(3)
     .populate('author', 'username profilePicture')
     .lean();
 
@@ -984,19 +1041,16 @@ router.get('/', protect, asyncHandler(async (req, res) => {
 
   switch (mixStrategy) {
     case 'chronological':
-      // Strictly chronological
       mixedPosts = [...userPosts, ...followingPosts, ...publicPosts]
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       break;
 
     case 'balanced':
-      // Interleave posts evenly
       mixedPosts = interleavePosts(userPosts, followingPosts, publicPosts);
       break;
 
     case 'weighted':
     default:
-      // Weighted random within time windows
       mixedPosts = weightedShuffle([...userPosts, ...followingPosts, ...publicPosts]);
       break;
   }
@@ -1051,10 +1105,8 @@ function interleavePosts(own, following, public_) {
   const maxLength = Math.max(own.length, following.length, public_.length);
 
   for (let i = 0; i < maxLength; i++) {
-    // Add own post (if available)
     if (i < own.length) result.push(own[i]);
 
-    // Add 2-3 following posts
     for (let j = 0; j < 3; j++) {
       const followingIndex = i * 3 + j;
       if (followingIndex < following.length) {
@@ -1062,7 +1114,6 @@ function interleavePosts(own, following, public_) {
       }
     }
 
-    // Add 1-2 public posts
     for (let j = 0; j < 2; j++) {
       const publicIndex = i * 2 + j;
       if (publicIndex < public_.length) {
@@ -1073,67 +1124,6 @@ function interleavePosts(own, following, public_) {
 
   return result;
 }
-
-/**
- * @route   GET /api/posts/:id
- * @desc    Get single post (respects visibility)
- * @access  Public/Private
- */
-router.get('/:id', [
-  param('id').isMongoId().withMessage('Invalid post ID')
-], asyncHandler(async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ success: false, errors: errors.array() });
-  }
-
-  let post = await Post.findById(req.params.id);
-  if (!post || post.isHidden) {
-    return res.status(404).json({ success: false, message: 'Post not found' });
-  }
-
-  // Visibility check
-  const isPublic = post.visibility === 'public';
-  let hasPermission = isPublic;
-
-  if (!hasPermission && req.user) {
-    const isOwn = post.author.toString() === req.user._id.toString();
-    if (isOwn || post.visibility === 'private') {
-      hasPermission = true;
-    } else if (post.visibility === 'followers') {
-      const viewer = await User.findById(req.user._id).select('following');
-      if (viewer?.following?.some(id => id.toString() === post.author.toString())) {
-        hasPermission = true;
-      }
-    }
-  }
-
-  if (!hasPermission) {
-    return res.status(403).json({ success: false, message: 'Not authorized to view this post' });
-  }
-
-  // ✅ Track view if authenticated (not author)
-  if (req.user && post.author.toString() !== req.user._id.toString()) {
-    await post.addView(req.user._id);
-  }
-
-  post = await Post.findById(req.params.id)
-    .populate('author', 'username profilePicture')
-    .lean();
-
-  const isLiked = req.user ? post.likes?.some(id => id.toString() === req.user._id.toString()) : false;
-  const hasViewed = req.user ? post.views?.some(v => v.user.toString() === req.user._id.toString()) : false;
-
-  res.json({
-    success: true,
-    data: {
-      ...post,
-      media: toAbsoluteMedia(req, post.media),
-      isLiked,
-      hasViewed
-    }
-  });
-}));
 
 /**
  * @route   GET /api/posts/analytics/:id
@@ -1160,11 +1150,9 @@ router.get('/analytics/:id', protect, [
     return res.status(403).json({ success: false, message: 'Not authorized' });
   }
 
-  // Calculate analytics
   const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const recentViews = post.views?.filter(v => v.viewedAt > last7Days) || [];
 
-  // Group views by day
   const viewsByDay = {};
   post.views?.forEach(view => {
     const day = view.viewedAt.toISOString().split('T')[0];
@@ -1191,68 +1179,6 @@ router.get('/analytics/:id', protect, [
   });
 }));
 
-/**
- * @route   GET /api/posts/trending
- * @desc    Get trending posts based on views + likes
- * @access  Public
- */
-router.get('/trending', asyncHandler(async (req, res) => {
-  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-  // Calculate trending score: (views * 0.3) + (likes * 0.7)
-  const posts = await Post.aggregate([
-    {
-      $match: {
-        visibility: 'public',
-        isHidden: false,
-        createdAt: { $gte: oneWeekAgo }
-      }
-    },
-    {
-      $addFields: {
-        trendingScore: {
-          $add: [
-            { $multiply: ['$viewsCount', 0.3] },
-            { $multiply: ['$likesCount', 0.7] }
-          ]
-        }
-      }
-    },
-    { $sort: { trendingScore: -1 } },
-    { $limit: 20 },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'author',
-        foreignField: '_id',
-        as: 'author'
-      }
-    },
-    { $unwind: '$author' },
-    {
-      $project: {
-        content: 1,
-        media: 1,
-        hashtags: 1,
-        likesCount: 1,
-        viewsCount: 1,
-        commentsCount: 1,
-        trendingScore: 1,
-        createdAt: 1,
-        'author.username': 1,
-        'author.profilePicture': 1
-      }
-    }
-  ]);
-
-  const postsWithMedia = posts.map(p => ({
-    ...p,
-    media: toAbsoluteMedia(req, p.media),
-    isLiked: req.user ? p.likes?.some(id => id.toString() === req.user._id.toString()) : false
-  }));
-
-  res.json({ success: true, data: postsWithMedia });
-}));
 // ========== REELS/VIDEO ENDPOINTS ==========
 
 /**
@@ -1273,10 +1199,8 @@ router.get('/videos/random', [
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
-  // Build visibility filter
   let visibilityFilter = { visibility: 'public' };
 
-  // If authenticated, include posts from followed users
   if (req.user) {
     const user = await User.findById(req.user._id).select('following');
     const following = user?.following || [];
@@ -1289,7 +1213,6 @@ router.get('/videos/random', [
     };
   }
 
-  // Get random video posts using aggregation
   const posts = await Post.aggregate([
     {
       $match: {
@@ -1299,7 +1222,7 @@ router.get('/videos/random', [
         $expr: { $gt: [{ $size: '$media' }, 0] }
       }
     },
-    { $sample: { size: limit * 2 } }, // Get more samples for randomness
+    { $sample: { size: limit * 2 } },
     { $skip: skip },
     { $limit: limit },
     {
@@ -1328,7 +1251,6 @@ router.get('/videos/random', [
     }
   ]);
 
-  // Check if user liked each post
   if (req.user) {
     posts.forEach(post => {
       post.isLiked = post.likes?.some(id =>
@@ -1337,7 +1259,6 @@ router.get('/videos/random', [
     });
   }
 
-  // Track views for authenticated users (fire and forget)
   if (req.user) {
     setImmediate(async () => {
       for (const post of posts) {
@@ -1459,13 +1380,12 @@ router.get('/videos/user/:userId', [
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
-  // Determine visibility based on relationship
   let visibilityFilter = { visibility: 'public' };
 
   if (req.user) {
     const isOwn = req.user._id.toString() === targetUserId;
     if (isOwn) {
-      visibilityFilter = {}; // Own posts: see all
+      visibilityFilter = {};
     } else {
       const viewer = await User.findById(req.user._id).select('following');
       if (viewer?.following?.some(id => id.toString() === targetUserId)) {
@@ -1533,7 +1453,6 @@ router.get('/videos/recommended', protect, [
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
-  // Get user's liked posts to understand preferences
   const userLikedPosts = await Post.find({
     likes: req.user._id,
     'media.mediaType': 'video'
@@ -1542,28 +1461,22 @@ router.get('/videos/recommended', protect, [
     .limit(50)
     .lean();
 
-  // Extract user's interests
   const followedUsers = req.user.following || [];
   const likedHashtags = userLikedPosts.flatMap(p => p.hashtags || []);
   const likedAuthors = userLikedPosts.map(p => p.author);
 
-  // Create weighted recommendation query
   const recommendationQuery = {
     visibility: 'public',
     isHidden: false,
     'media.mediaType': 'video',
-    author: { $ne: req.user._id }, // Exclude user's own posts
+    author: { $ne: req.user._id },
     $or: [
-      // Posts from followed users
       ...(followedUsers.length ? [{ author: { $in: followedUsers } }] : []),
-      // Posts with hashtags user liked
       ...(likedHashtags.length ? [{ hashtags: { $in: likedHashtags } }] : []),
-      // Posts from authors user liked
       ...(likedAuthors.length ? [{ author: { $in: likedAuthors } }] : [])
     ]
   };
 
-  // If no preferences, fall back to random
   if (followedUsers.length === 0 && likedHashtags.length === 0 && likedAuthors.length === 0) {
     return res.redirect(`/api/posts/videos/random?page=${page}&limit=${limit}`);
   }
@@ -1575,14 +1488,12 @@ router.get('/videos/recommended', protect, [
     .populate('author', 'username profilePicture isVerified')
     .lean();
 
-  // Mark liked posts
   posts.forEach(post => {
     post.isLiked = post.likes?.some(id =>
       id.toString() === req.user._id.toString()
     ) || false;
   });
 
-  // Track views
   setImmediate(async () => {
     for (const post of posts) {
       if (post.author._id.toString() !== req.user._id.toString()) {
@@ -1624,7 +1535,6 @@ router.get('/videos/:id/next', [
     return res.status(404).json({ success: false, message: 'Post not found' });
   }
 
-  // Build visibility filter
   let visibilityFilter = { visibility: 'public' };
   if (req.user) {
     const user = await User.findById(req.user._id).select('following');
@@ -1637,7 +1547,6 @@ router.get('/videos/:id/next', [
     };
   }
 
-  // Find next video (created after current, or random if none)
   const nextPost = await Post.findOne({
     ...visibilityFilter,
     isHidden: false,
@@ -1650,7 +1559,6 @@ router.get('/videos/:id/next', [
     .lean();
 
   if (!nextPost) {
-    // If no next, get a random video
     const random = await Post.aggregate([
       {
         $match: {
@@ -1703,4 +1611,27 @@ router.get('/videos/:id/next', [
     }
   });
 }));
+
+// ========== ERROR HANDLING ==========
+router.use((err, req, res, next) => {
+  console.error('Posts Route Error:', {
+    path: req.path,
+    method: req.method,
+    error: err.message,
+    stack: err.stack
+  });
+
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: 'File too large (max 10MB)' });
+    }
+    return res.status(400).json({ success: false, message: err.message });
+  }
+
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Server error'
+  });
+});
+
 module.exports = router;
