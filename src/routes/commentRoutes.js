@@ -7,7 +7,18 @@ const { protect } = require('../middleware/auth');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
 const NotificationMiddleware = require('../middleware/NotificationMiddleware'); // ADDED
+// ========== PUSH NOTIFICATION HELPER ==========
+const sendPushNotification = async (userId, notificationData) => {
+  try {
+    // Don't send if no userId
+    if (!userId) return;
 
+    const pushService = require('../services/pushNotificationService');
+    await pushService.sendToUser(userId, notificationData);
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+  }
+};
 // ========== SAFE MODEL IMPORTS ==========
 let Comment, Post, User;
 
@@ -39,7 +50,7 @@ const storage = new CloudinaryStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
@@ -57,22 +68,22 @@ const asyncHandler = (fn) => (req, res, next) => {
 const checkCommentAccess = asyncHandler(async (req, res, next) => {
   const comment = await Comment.findById(req.params.commentId)
     .populate('author', 'username profilePicture rank');
-  
+
   if (!comment) {
-    return res.status(404).json({ 
-      success: false, 
-      message: 'Comment not found' 
+    return res.status(404).json({
+      success: false,
+      message: 'Comment not found'
     });
   }
-  
+
   // Check if comment is hidden
   if (comment.isHidden) {
-    return res.status(403).json({ 
-      success: false, 
-      message: 'This comment has been hidden' 
+    return res.status(403).json({
+      success: false,
+      message: 'This comment has been hidden'
     });
   }
-  
+
   req.comment = comment;
   next();
 });
@@ -82,9 +93,9 @@ const checkCommentAccess = asyncHandler(async (req, res, next) => {
  */
 const checkCommentOwnership = asyncHandler(async (req, res, next) => {
   if (req.comment.author._id.toString() !== req.user.id) {
-    return res.status(403).json({ 
-      success: false, 
-      message: 'You are not authorized to modify this comment' 
+    return res.status(403).json({
+      success: false,
+      message: 'You are not authorized to modify this comment'
     });
   }
   next();
@@ -114,7 +125,7 @@ router.get('/post/:postId', [
   const includeReplies = req.query.includeReplies === 'true';
 
   const result = await Comment.getByPostOptimized(postId, page, limit, includeReplies);
-  
+
   // Add isLiked flag for authenticated users
   const addIsLikedRecursively = (comments, userId) => {
     return comments.map(comment => {
@@ -169,18 +180,18 @@ router.get('/:commentId/replies', [
   const skip = (page - 1) * limit;
 
   const [replies, total] = await Promise.all([
-    Comment.find({ 
+    Comment.find({
       parentComment: commentId,
-      isHidden: false 
+      isHidden: false
     })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate('author', 'username profilePicture rank')
       .lean(),
-    Comment.countDocuments({ 
+    Comment.countDocuments({
       parentComment: commentId,
-      isHidden: false 
+      isHidden: false
     })
   ]);
 
@@ -211,6 +222,11 @@ router.get('/:commentId/replies', [
  * @desc    Create a new comment on a post
  * @access  Private
  */
+/**
+ * @route   POST /api/comments/post/:postId
+ * @desc    Create a new comment on a post
+ * @access  Private
+ */
 router.post('/post/:postId',
   protect,
   upload.array('media', 5),
@@ -225,9 +241,9 @@ router.post('/post/:postId',
   asyncHandler(async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ 
-        success: false, 
-        errors: errors.array() 
+      return res.status(400).json({
+        success: false,
+        errors: errors.array()
       });
     }
 
@@ -235,17 +251,17 @@ router.post('/post/:postId',
     const { content, parentComment } = req.body;
 
     // Verify post exists
-    const post = await Post.findById(postId);
+    const post = await Post.findById(postId).populate('author', 'username profilePicture');
     if (!post) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Post not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
       });
     }
 
     // Verify parent comment exists if provided
     if (parentComment) {
-      const parent = await Comment.findById(parentComment);
+      const parent = await Comment.findById(parentComment).populate('author', 'username profilePicture');
 
       if (!parent || parent.post.toString() !== postId) {
         return res.status(400).json({
@@ -278,9 +294,9 @@ router.post('/post/:postId',
         $inc: { commentsCount: 1 }
       }),
       User.findByIdAndUpdate(req.user.id, {
-        $inc: { 
+        $inc: {
           commentsCount: 1,
-          score: 5 
+          score: 5
         }
       })
     ]);
@@ -302,15 +318,104 @@ router.post('/post/:postId',
       }
     });
 
-    // Fire notification middleware asynchronously
-    setImmediate(() => {
+    // 🔔 Send push notifications based on comment type
+    setImmediate(async () => {
+      try {
+        // If it's a reply to another comment
+        if (parentComment && req.parentComment) {
+          // Notify the parent comment author (if not the same user)
+          if (req.parentComment.author._id.toString() !== req.user.id) {
+            const replyNotification = {
+              title: '↩️ New Reply',
+              body: `${req.user.username} replied to your comment: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`,
+              type: 'reply',
+              icon: '/icons/reply-icon.png',
+              badge: '/badge-reply.png',
+              data: {
+                url: `/posts/${postId}?comment=${comment._id}`,
+                postId: postId,
+                commentId: comment._id,
+                parentCommentId: parentComment,
+                senderId: req.user.id,
+                senderUsername: req.user.username,
+                senderProfilePicture: req.user.profilePicture,
+                replyContent: content.substring(0, 200),
+                timestamp: new Date().toISOString()
+              }
+            };
+            await sendPushNotification(req.parentComment.author._id, replyNotification);
+          }
+        }
+        // If it's a top-level comment on a post
+        else {
+          // Notify the post author (if not the same user)
+          if (post.author._id.toString() !== req.user.id) {
+            const commentNotification = {
+              title: '💬 New Comment',
+              body: `${req.user.username} commented on your post: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`,
+              type: 'comment',
+              icon: '/icons/comment-icon.png',
+              badge: '/badge-comment.png',
+              data: {
+                url: `/posts/${postId}?comment=${comment._id}`,
+                postId: postId,
+                commentId: comment._id,
+                senderId: req.user.id,
+                senderUsername: req.user.username,
+                senderProfilePicture: req.user.profilePicture,
+                commentContent: content.substring(0, 200),
+                postContent: post.content?.substring(0, 100),
+                timestamp: new Date().toISOString()
+              }
+            };
+            await sendPushNotification(post.author._id, commentNotification);
+          }
+        }
+
+        // Check for mentions in the comment content
+        const mentionRegex = /@(\w+)/g;
+        const mentions = content.match(mentionRegex);
+
+        if (mentions) {
+          const usernames = mentions.map(m => m.substring(1));
+          const mentionedUsers = await User.find({
+            username: { $in: usernames },
+            _id: { $ne: req.user.id } // Exclude self
+          }).select('_id username');
+
+          for (const mentionedUser of mentionedUsers) {
+            const mentionNotification = {
+              title: '@ Mention',
+              body: `${req.user.username} mentioned you in a comment: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`,
+              type: 'mention',
+              icon: '/icons/mention-icon.png',
+              badge: '/badge-mention.png',
+              data: {
+                url: `/posts/${postId}?comment=${comment._id}`,
+                postId: postId,
+                commentId: comment._id,
+                senderId: req.user.id,
+                senderUsername: req.user.username,
+                mentionedUsername: mentionedUser.username,
+                mentionContext: content.substring(0, 200),
+                timestamp: new Date().toISOString()
+              }
+            };
+            await sendPushNotification(mentionedUser._id, mentionNotification);
+          }
+        }
+      } catch (pushError) {
+        console.error('Error sending push notifications:', pushError);
+      }
+
+      // Fire original notification middleware
       if (parentComment) {
         NotificationMiddleware.afterReply(req, res, next);
       } else {
         NotificationMiddleware.afterComment(req, res, next);
       }
     });
-}));
+  }));
 
 /**
  * @route   PUT /api/comments/:commentId
@@ -330,7 +435,7 @@ router.put('/:commentId',
   checkCommentOwnership,
   asyncHandler(async (req, res) => {
     const { content } = req.body;
-    
+
     req.comment.content = content.trim();
     req.comment.isEdited = true;
     req.comment.editedAt = new Date();
@@ -340,7 +445,7 @@ router.put('/:commentId',
       success: true,
       data: req.comment
     });
-}));
+  }));
 
 /**
  * @route   DELETE /api/comments/:commentId
@@ -357,10 +462,10 @@ router.delete('/:commentId',
   asyncHandler(async (req, res) => {
     const { commentId } = req.params;
     const comment = req.comment;
-    
+
     // Delete comment and all replies
     const result = await Comment.deleteWithReplies(commentId);
-    
+
     // Update counts
     await Promise.all([
       // Update post's comment count if this is a top-level comment
@@ -378,8 +483,13 @@ router.delete('/:commentId',
       message: 'Comment deleted successfully',
       deletedCount: result.deletedCount
     });
-}));
+  }));
 
+/**
+ * @route   POST /api/comments/:commentId/like
+ * @desc    Like a comment
+ * @access  Private
+ */
 /**
  * @route   POST /api/comments/:commentId/like
  * @desc    Like a comment
@@ -392,10 +502,10 @@ router.post('/:commentId/like', protect,
   checkCommentAccess,
   asyncHandler(async (req, res) => {
     const comment = req.comment;
-    
+
     // Check if already liked
     const isLiked = comment.likes?.some(id => id.toString() === req.user.id);
-    
+
     if (isLiked) {
       return res.json({
         success: true,
@@ -403,16 +513,44 @@ router.post('/:commentId/like', protect,
         isLiked: true
       });
     }
-    
+
     // Add like and get updated comment
     const updatedComment = await comment.addLike(req.user.id);
-    
+
     // Update user's likes received if not liking own comment
     if (comment.author._id.toString() !== req.user.id) {
       await User.findByIdAndUpdate(comment.author._id, {
-        $inc: { 
+        $inc: {
           likesReceived: 1,
-          score: 1 
+          score: 1
+        }
+      });
+
+      // 🔔 Send push notification for comment like (asynchronously)
+      setImmediate(async () => {
+        try {
+          const likeNotification = {
+            title: '❤️ Comment Like',
+            body: `${req.user.username} liked your comment`,
+            type: 'comment_like',
+            icon: '/icons/like-icon.png',
+            badge: '/badge-like.png',
+            data: {
+              url: `/posts/${comment.post}?comment=${comment._id}`,
+              postId: comment.post,
+              commentId: comment._id,
+              senderId: req.user.id,
+              senderUsername: req.user.username,
+              senderProfilePicture: req.user.profilePicture,
+              commentContent: comment.content?.substring(0, 100),
+              timestamp: new Date().toISOString()
+            }
+          };
+
+          const pushService = require('../services/pushNotificationService');
+          await pushService.sendToUser(comment.author._id, likeNotification);
+        } catch (pushError) {
+          console.error('Error sending comment like push:', pushError);
         }
       });
     }
@@ -422,24 +560,24 @@ router.post('/:commentId/like', protect,
       likesCount: updatedComment.likesCount,
       isLiked: true
     });
-}));
+  }));
 
 /**
  * @route   POST /api/comments/:commentId/unlike
  * @desc    Unlike a comment
  * @access  Private
  */
-router.post('/:commentId/unlike',protect,
+router.post('/:commentId/unlike', protect,
   [
     param('commentId').isMongoId().withMessage('Invalid comment ID')
   ],
   checkCommentAccess,
   asyncHandler(async (req, res) => {
     const comment = req.comment;
-    
+
     // Check if already unliked
     const isLiked = comment.likes?.some(id => id.toString() === req.user.id);
-    
+
     if (!isLiked) {
       return res.json({
         success: true,
@@ -447,16 +585,16 @@ router.post('/:commentId/unlike',protect,
         isLiked: false
       });
     }
-    
+
     // Remove like and get updated comment
     const updatedComment = await comment.removeLike(req.user.id);
-    
+
     // Update user's likes received
     if (comment.author._id.toString() !== req.user.id) {
       await User.findByIdAndUpdate(comment.author._id, {
-        $inc: { 
+        $inc: {
           likesReceived: -1,
-          score: -1 
+          score: -1
         }
       });
     }
@@ -466,7 +604,7 @@ router.post('/:commentId/unlike',protect,
       likesCount: updatedComment.likesCount,
       isLiked: false
     });
-}));
+  }));
 
 /**
  * @route   POST /api/comments/:commentId/hide
@@ -497,7 +635,7 @@ router.post('/:commentId/hide',
       success: true,
       message: 'Comment hidden successfully'
     });
-}));
+  }));
 
 // ========== ERROR HANDLING ==========
 router.use((err, req, res, next) => {

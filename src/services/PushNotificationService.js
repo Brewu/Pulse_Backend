@@ -11,6 +11,9 @@ class PushNotificationService {
         process.env.VAPID_PUBLIC_KEY,
         process.env.VAPID_PRIVATE_KEY
       );
+      console.log('✅ Web Push configured with VAPID keys');
+    } else {
+      console.warn('⚠️ VAPID keys not found. Push notifications will not work.');
     }
   }
 
@@ -23,13 +26,15 @@ class PushNotificationService {
   async storeSubscription(userId, subscriptionData) {
     try {
       const User = require('mongoose').model('User');
-      
+
       // Check if subscription already exists
       const user = await User.findById(userId);
       if (!user) return false;
 
-      // Remove old subscription with same endpoint if exists
+      // Initialize pushSubscriptions if it doesn't exist
       user.pushSubscriptions = user.pushSubscriptions || [];
+
+      // Remove old subscription with same endpoint if exists
       user.pushSubscriptions = user.pushSubscriptions.filter(
         sub => sub.endpoint !== subscriptionData.endpoint
       );
@@ -41,7 +46,9 @@ class PushNotificationService {
         platform: subscriptionData.platform || 'web',
         deviceName: subscriptionData.deviceName || 'Unknown Device',
         userAgent: subscriptionData.userAgent,
-        lastUsed: new Date()
+        lastUsed: new Date(),
+        createdAt: new Date(),
+        isActive: true
       });
 
       await user.save();
@@ -57,13 +64,13 @@ class PushNotificationService {
   async removeSubscription(userId, endpoint) {
     try {
       const User = require('mongoose').model('User');
-      
+
       await User.findByIdAndUpdate(userId, {
         $pull: {
           pushSubscriptions: { endpoint: endpoint }
         }
       });
-      
+
       console.log(`📱 Push subscription removed for user ${userId}`);
       return true;
     } catch (error) {
@@ -77,7 +84,7 @@ class PushNotificationService {
     try {
       const User = require('mongoose').model('User');
       const user = await User.findById(userId).select('pushSubscriptions notificationPreferences');
-      
+
       if (!user) {
         console.log(`User ${userId} not found`);
         return false;
@@ -92,14 +99,14 @@ class PushNotificationService {
       // Check user's notification preferences
       if (user.notificationPreferences) {
         // Global push preference
-        if (user.notificationPreferences.push === false) {
+        if (user.notificationPreferences.global?.push === false) {
           console.log(`User ${userId} has disabled all push notifications`);
           return false;
         }
 
         // Check specific notification type
         const type = notificationData.type;
-        if (user.notificationPreferences[type] === false) {
+        if (user.notificationPreferences.types?.[type]?.push === false) {
           console.log(`User ${userId} has disabled ${type} notifications`);
           return false;
         }
@@ -112,7 +119,10 @@ class PushNotificationService {
       const sendPromises = user.pushSubscriptions.map(async (subscription) => {
         try {
           let result = false;
-          
+
+          // Only send to active subscriptions
+          if (subscription.isActive === false) return false;
+
           switch (subscription.platform) {
             case 'web':
               result = await this.sendWebPush(subscription, payload);
@@ -128,16 +138,16 @@ class PushNotificationService {
           // Update last used time on success
           if (result) {
             await User.updateOne(
-              { 
-                _id: userId, 
-                'pushSubscriptions.endpoint': subscription.endpoint 
+              {
+                _id: userId,
+                'pushSubscriptions.endpoint': subscription.endpoint
               },
-              { 
-                $set: { 'pushSubscriptions.$.lastUsed': new Date() } 
+              {
+                $set: { 'pushSubscriptions.$.lastUsed': new Date() }
               }
             );
           }
-          
+
           return result;
         } catch (error) {
           // If subscription is invalid/expired (410 Gone), remove it
@@ -152,36 +162,51 @@ class PushNotificationService {
 
       const results = await Promise.allSettled(sendPromises);
       const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
-      
+
       console.log(`📱 Push sent to ${successCount}/${user.pushSubscriptions.length} devices for user ${userId}`);
       return successCount > 0;
-      
+
     } catch (error) {
       console.error('Error sending push notification:', error);
       return false;
     }
   }
 
-  // Build notification payload
+  // Build notification payload with rich formatting
   buildPayload(notificationData) {
-    // Format for web push (VAPID)
-    return {
-      title: notificationData.title || 'New Notification',
-      body: notificationData.message || 'You have a new notification',
-      icon: '/icons/icon-192x192.png', // Your app icon
-      badge: '/icons/badge-72x72.png',
-      image: notificationData.metadata?.image,
-      data: {
-        url: notificationData.actionUrl || '/',
-        type: notificationData.type,
-        notificationId: notificationData._id,
-        sender: notificationData.sender,
-        senderUsername: notificationData.senderUsername,
-        reference: notificationData.reference,
-        metadata: notificationData.metadata,
-        timestamp: notificationData.createdAt || new Date().toISOString()
-      },
-      actions: [
+    // Default icons based on notification type
+    const getIconForType = (type) => {
+      const icons = {
+        like: '/icons/like-icon.png',
+        comment: '/icons/comment-icon.png',
+        reply: '/icons/reply-icon.png',
+        mention: '/icons/mention-icon.png',
+        follow: '/icons/follow-icon.png',
+        message: '/icons/message-icon.png',
+        comment_like: '/icons/like-icon.png',
+        poll_vote: '/icons/poll-icon.png',
+        system: '/icons/system-icon.png'
+      };
+      return icons[type] || '/pulse-icon-192.png';
+    };
+
+    const getBadgeForType = (type) => {
+      const badges = {
+        like: '/badge-like.png',
+        comment: '/badge-comment.png',
+        reply: '/badge-reply.png',
+        mention: '/badge-mention.png',
+        follow: '/badge-follow.png',
+        message: '/badge-message.png',
+        comment_like: '/badge-like.png',
+        poll_vote: '/badge-poll.png'
+      };
+      return badges[type] || '/pulse-badge-72.png';
+    };
+
+    // Get appropriate actions based on notification type
+    const getActionsForType = (type) => {
+      const commonActions = [
         {
           action: 'open',
           title: 'Open App'
@@ -190,12 +215,95 @@ class PushNotificationService {
           action: 'dismiss',
           title: 'Dismiss'
         }
-      ],
-      vibrate: [200, 100, 200],
-      requireInteraction: true,
-      renotify: true,
-      tag: notificationData.type, // Group similar notifications
-      timestamp: Math.floor(new Date(notificationData.createdAt || Date.now()).getTime())
+      ];
+
+      const typeActions = {
+        comment: [
+          {
+            action: 'reply',
+            title: 'Reply'
+          },
+          {
+            action: 'view',
+            title: 'View Post'
+          },
+          {
+            action: 'dismiss',
+            title: 'Dismiss'
+          }
+        ],
+        reply: [
+          {
+            action: 'reply',
+            title: 'Reply'
+          },
+          {
+            action: 'view',
+            title: 'View Thread'
+          },
+          {
+            action: 'dismiss',
+            title: 'Dismiss'
+          }
+        ],
+        message: [
+          {
+            action: 'reply',
+            title: 'Reply'
+          },
+          {
+            action: 'mark-read',
+            title: 'Mark Read'
+          },
+          {
+            action: 'dismiss',
+            title: 'Dismiss'
+          }
+        ],
+        follow: [
+          {
+            action: 'view-profile',
+            title: 'View Profile'
+          },
+          {
+            action: 'follow-back',
+            title: 'Follow Back'
+          },
+          {
+            action: 'dismiss',
+            title: 'Dismiss'
+          }
+        ]
+      };
+
+      return typeActions[type] || commonActions;
+    };
+
+    // Format for web push (VAPID)
+    return {
+      title: notificationData.title || 'Pulse Notification',
+      body: notificationData.body || notificationData.message || 'You have a new notification',
+      icon: notificationData.icon || getIconForType(notificationData.type),
+      badge: notificationData.badge || getBadgeForType(notificationData.type),
+      image: notificationData.image || notificationData.data?.image,
+      data: {
+        url: notificationData.data?.url || notificationData.actionUrl || '/',
+        type: notificationData.type || 'notification',
+        notificationId: notificationData._id,
+        sender: notificationData.data?.senderId || notificationData.sender,
+        senderUsername: notificationData.data?.senderUsername || notificationData.senderUsername,
+        postId: notificationData.data?.postId,
+        commentId: notificationData.data?.commentId,
+        metadata: notificationData.metadata || notificationData.data,
+        timestamp: notificationData.data?.timestamp || new Date().toISOString()
+      },
+      actions: notificationData.actions || getActionsForType(notificationData.type),
+      vibrate: notificationData.vibrate || [200, 100, 200],
+      requireInteraction: notificationData.requireInteraction !== false,
+      renotify: notificationData.renotify !== false,
+      tag: notificationData.tag || notificationData.type, // Group similar notifications
+      timestamp: Math.floor(new Date(notificationData.data?.timestamp || Date.now()).getTime()),
+      silent: notificationData.silent || false
     };
   }
 
@@ -206,7 +314,7 @@ class PushNotificationService {
         endpoint: subscription.endpoint,
         keys: subscription.keys || {}
       };
-      
+
       await webpush.sendNotification(pushSubscription, JSON.stringify(payload));
       console.log('✅ Web push sent successfully');
       return true;
@@ -244,7 +352,7 @@ class PushNotificationService {
       });
 
       const result = await response.json();
-      
+
       if (result.data?.status === 'ok') {
         console.log('✅ Expo push sent successfully');
         return true;
@@ -263,7 +371,7 @@ class PushNotificationService {
     try {
       const User = require('mongoose').model('User');
       const user = await User.findById(userId).select('pushSubscriptions');
-      
+
       if (!user || !user.pushSubscriptions) return;
 
       const badgePayload = {
@@ -298,7 +406,7 @@ class PushNotificationService {
   async cleanupSubscriptions() {
     try {
       const User = require('mongoose').model('User');
-      
+
       // Remove subscriptions not used in last 30 days
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);

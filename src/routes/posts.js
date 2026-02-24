@@ -7,7 +7,18 @@ const { protect } = require('../middleware/auth');
 const NotificationMiddleware = require('../middleware/NotificationMiddleware');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
+// ========== PUSH NOTIFICATION HELPER ==========
+const sendPushNotification = async (userId, notificationData) => {
+  try {
+    // Don't send if no userId
+    if (!userId) return;
 
+    const pushService = require('../services/pushNotificationService');
+    await pushService.sendToUser(userId, notificationData);
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+  }
+};
 // ========== SAFE MODEL IMPORTS ==========
 let Post, User;
 
@@ -638,6 +649,11 @@ router.put('/:id', protect, [
  * @desc    Like a post
  * @access  Private
  */
+/**
+ * @route   POST /api/posts/:id/like
+ * @desc    Like a post
+ * @access  Private
+ */
 router.post('/:id/like', protect,
   [
     param('id').isMongoId()
@@ -648,7 +664,9 @@ router.post('/:id/like', protect,
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const post = await Post.findById(req.params.id);
+    const post = await Post.findById(req.params.id)
+      .populate('author', 'username profilePicture');
+
     if (!post) {
       return res.status(404).json({ success: false, message: 'Post not found' });
     }
@@ -666,6 +684,29 @@ router.post('/:id/like', protect,
     req.post = post;
 
     await post.addLike(req.user._id);
+
+    // 🔔 Send rich push notification to post author (if not self-like)
+    if (post.author._id.toString() !== req.user._id.toString()) {
+      const notificationData = {
+        title: '❤️ New Like',
+        body: `${req.user.username} liked your post`,
+        type: 'like',
+        icon: '/icons/like-icon.png', // Custom icon for likes
+        badge: '/badge-like.png',
+        data: {
+          url: `/posts/${post._id}`,
+          postId: post._id,
+          senderId: req.user._id,
+          senderUsername: req.user.username,
+          senderProfilePicture: req.user.profilePicture,
+          postContent: post.content?.substring(0, 100),
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      // Send push notification asynchronously (don't await)
+      sendPushNotification(post.author._id, notificationData).catch(console.error);
+    }
 
     res.json({
       success: true,
@@ -792,12 +833,12 @@ router.get('/', protect, asyncHandler(async (req, res) => {
   const following = user.following || [];
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
-  
+
   // Customizable ratio (default 60%)
   const followingRatio = parseInt(req.query.followingRatio) || 60;
   const followingCount = Math.floor(limit * (followingRatio / 100));
   const publicCount = limit - followingCount;
-  
+
   // Mix strategy
   const mixStrategy = req.query.mixStrategy || 'weighted'; // 'balanced', 'chronological', 'weighted'
 
@@ -837,19 +878,19 @@ router.get('/', protect, asyncHandler(async (req, res) => {
 
   // Mix posts based on strategy
   let mixedPosts = [];
-  
-  switch(mixStrategy) {
+
+  switch (mixStrategy) {
     case 'chronological':
       // Strictly chronological
       mixedPosts = [...userPosts, ...followingPosts, ...publicPosts]
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       break;
-      
+
     case 'balanced':
       // Interleave posts evenly
       mixedPosts = interleavePosts(userPosts, followingPosts, publicPosts);
       break;
-      
+
     case 'weighted':
     default:
       // Weighted random within time windows
@@ -882,8 +923,8 @@ router.get('/', protect, asyncHandler(async (req, res) => {
   const total = followingTotal + publicTotal;
   const totalPages = Math.ceil(total / limit);
 
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     data: postsWithMedia,
     pagination: {
       page,
@@ -905,11 +946,11 @@ router.get('/', protect, asyncHandler(async (req, res) => {
 function interleavePosts(own, following, public_) {
   const result = [];
   const maxLength = Math.max(own.length, following.length, public_.length);
-  
+
   for (let i = 0; i < maxLength; i++) {
     // Add own post (if available)
     if (i < own.length) result.push(own[i]);
-    
+
     // Add 2-3 following posts
     for (let j = 0; j < 3; j++) {
       const followingIndex = i * 3 + j;
@@ -917,7 +958,7 @@ function interleavePosts(own, following, public_) {
         result.push(following[followingIndex]);
       }
     }
-    
+
     // Add 1-2 public posts
     for (let j = 0; j < 2; j++) {
       const publicIndex = i * 2 + j;
@@ -926,7 +967,7 @@ function interleavePosts(own, following, public_) {
       }
     }
   }
-  
+
   return result;
 }
 

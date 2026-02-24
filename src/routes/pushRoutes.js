@@ -362,6 +362,82 @@ router.post('/test', protect, async (req, res) => {
             success: false,
             error: 'Failed to send test notification'
         });
+
+    }
+});
+
+// =============================================
+// SEND NOTIFICATION TO SPECIFIC USER (Internal use)
+// =============================================
+// This endpoint is for your notification service to trigger push notifications
+router.post('/send/:userId', protect, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { title, body, data, type } = req.body;
+
+        if (!title || !body) {
+            return res.status(400).json({
+                success: false,
+                error: 'Title and body are required'
+            });
+        }
+
+        const user = await User.findById(userId).select('pushSubscriptions');
+
+        if (!user || !user.pushSubscriptions || user.pushSubscriptions.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'No subscriptions found for user'
+            });
+        }
+
+        const payload = JSON.stringify({
+            title,
+            body,
+            icon: '/logo192.png',
+            badge: '/badge-72x72.png',
+            data: data || { type: type || 'notification', url: '/' }
+        });
+
+        // Send to all active subscriptions
+        const results = await Promise.allSettled(
+            user.pushSubscriptions.map(async (subscription) => {
+                try {
+                    await webpush.sendNotification({
+                        endpoint: subscription.endpoint,
+                        keys: subscription.keys
+                    }, payload);
+                    return { success: true, endpoint: subscription.endpoint };
+                } catch (error) {
+                    if (error.statusCode === 410) {
+                        // Remove invalid subscription
+                        await User.findByIdAndUpdate(
+                            userId,
+                            { $pull: { pushSubscriptions: { endpoint: subscription.endpoint } } }
+                        );
+                    }
+                    return { success: false, endpoint: subscription.endpoint, error: error.message };
+                }
+            })
+        );
+
+        const successCount = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+
+        res.json({
+            success: true,
+            message: `Notification sent to ${successCount} devices`,
+            data: {
+                total: results.length,
+                successful: successCount
+            }
+        });
+
+    } catch (error) {
+        console.error('Error sending notification:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to send notification'
+        });
     }
 });
 

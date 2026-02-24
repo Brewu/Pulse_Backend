@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-
+const Notification = require('../models/Notification');
 const postSchema = new mongoose.Schema({
   // Reference to the author
   author: {
