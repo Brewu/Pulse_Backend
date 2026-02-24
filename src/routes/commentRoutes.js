@@ -532,54 +532,84 @@ router.put('/:commentId',
  * @desc    Delete a comment (and all its replies)
  * @access  Private (Owner only)
  */
+// In your backend/routes/commentRoutes.js
+
+/**
+ * @route   DELETE /api/comments/:commentId
+ * @desc    Delete a comment (and all its replies)
+ * @access  Private (Owner only)
+ */
 router.delete('/:commentId',
   protect,
   [
-    param('commentId').isMongoId().withMessage('Invalid comment ID')
+    param('commentId').isMongoId().withMessage('Invalid comment ID format')
   ],
-  checkCommentAccess,
-  checkCommentOwnership,
   asyncHandler(async (req, res) => {
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        errors: errors.array()
+      });
+    }
+
     const { commentId } = req.params;
-    const comment = req.comment;
 
     try {
-      console.log(`🗑️ Deleting comment ${commentId}`);
+      // Find the comment first
+      const comment = await Comment.findById(commentId)
+        .populate('author', 'username');
 
-      // Delete comment and all replies using the model method
+      if (!comment) {
+        return res.status(404).json({
+          success: false,
+          message: 'Comment not found'
+        });
+      }
+
+      // Check ownership
+      if (comment.author._id.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to delete this comment'
+        });
+      }
+
+      // Check if comment is already hidden
+      if (comment.isHidden) {
+        return res.status(400).json({
+          success: false,
+          message: 'Comment is already hidden'
+        });
+      }
+
+      console.log(`🗑️ Deleting comment ${commentId} by user ${req.user.id}`);
+
+      // Delete comment and all replies
       const result = await Comment.deleteWithReplies(commentId);
 
-      console.log(`✅ Deleted ${result.deletedCount} comments`);
-
-      // Update counts in parallel
-      const updatePromises = [];
-
-      // Update post's comment count if this is a top-level comment
+      // Update counts (fire and forget - don't await)
       if (!comment.parentComment) {
-        updatePromises.push(
-          Post.findByIdAndUpdate(comment.post, {
-            $inc: { commentsCount: -1 }
-          }).catch(err => console.error('Error updating post count:', err))
-        );
+        // Top-level comment - update post
+        Post.findByIdAndUpdate(comment.post, {
+          $inc: { commentsCount: -1 }
+        }).catch(err => console.error('Error updating post count:', err));
       }
 
       // Update user's comment count
-      updatePromises.push(
-        User.findByIdAndUpdate(req.user.id, {
-          $inc: { commentsCount: -1 }
-        }).catch(err => console.error('Error updating user count:', err))
-      );
-
-      // Wait for all updates to complete (don't fail if one fails)
-      await Promise.allSettled(updatePromises);
+      User.findByIdAndUpdate(req.user.id, {
+        $inc: { commentsCount: -1 }
+      }).catch(err => console.error('Error updating user count:', err));
 
       res.json({
         success: true,
         message: 'Comment deleted successfully',
-        deletedCount: result?.deletedCount || 0
+        deletedCount: result?.deletedCount || 1
       });
+
     } catch (error) {
-      console.error('❌ Error deleting comment:', error);
+      console.error('❌ Error in delete route:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to delete comment',
