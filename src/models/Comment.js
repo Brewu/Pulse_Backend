@@ -178,9 +178,11 @@ commentSchema.post('remove', async function (doc) {
 });
 
 // ========== STATIC METHODS ==========
+// ========== STATIC METHODS ==========
 commentSchema.statics.getByPostOptimized = async function (postId, page = 1, limit = 20, includeReplies = false) {
   const skip = (page - 1) * limit;
 
+  // Get top-level comments (no parent)
   const topComments = await this.find({
     post: postId,
     parentComment: null,
@@ -192,8 +194,8 @@ commentSchema.statics.getByPostOptimized = async function (postId, page = 1, lim
     .populate('author', 'username profilePicture rank')
     .lean();
 
+  // If we need to include replies
   if (includeReplies && topComments.length > 0) {
-
     const topCommentIds = topComments.map(c => c._id.toString());
 
     // Fetch ALL comments for this post
@@ -205,29 +207,35 @@ commentSchema.statics.getByPostOptimized = async function (postId, page = 1, lim
       .populate('author', 'username profilePicture rank')
       .lean();
 
+    // Create a map of comments by ID
     const commentMap = {};
     allComments.forEach(comment => {
       comment.replies = [];
       commentMap[comment._id.toString()] = comment;
     });
 
-    // Build tree
+    // Build the reply tree
     allComments.forEach(comment => {
       if (comment.parentComment) {
-        const parent = commentMap[comment.parentComment.toString()];
-        if (parent) {
-          parent.replies.push(comment);
+        const parentId = comment.parentComment.toString();
+        if (commentMap[parentId]) {
+          commentMap[parentId].replies.push(comment);
         }
       }
     });
 
-    // Attach full nested replies only to the paginated top comments
+    // Attach replies to top comments
     topComments.forEach(comment => {
-      const fullComment = commentMap[comment._id.toString()];
-      comment.replies = fullComment?.replies || [];
+      const commentId = comment._id.toString();
+      if (commentMap[commentId]) {
+        comment.replies = commentMap[commentId].replies || [];
+      } else {
+        comment.replies = [];
+      }
     });
   }
 
+  // Get total count for pagination
   const total = await this.countDocuments({
     post: postId,
     parentComment: null,
