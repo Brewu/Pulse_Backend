@@ -28,7 +28,7 @@ const postSchema = new mongoose.Schema({
       enum: ['image', 'video', 'gif'],
       default: 'image'
     },
-       edits: {
+    edits: {
       brightness: Number,
       contrast: Number,
       saturation: Number,
@@ -120,7 +120,7 @@ const postSchema = new mongoose.Schema({
     },
     name: String
   },
-  
+
 
   // Link preview
   linkPreview: {
@@ -246,7 +246,12 @@ postSchema.index({ visibility: 1 });
 postSchema.index({ engagementScore: -1 });
 postSchema.index({ 'poll.endsAt': 1 });
 postSchema.index({ content: 'text', tags: 'text' });
-
+// In your Post model - add these indexes
+postSchema.index({ author: 1, createdAt: -1 }); // For user posts
+postSchema.index({ visibility: 1, createdAt: -1 }); // For public feed
+postSchema.index({ 'media.mediaType': 1 }); // For video/reels queries
+postSchema.index({ tags: 1 }); // For hashtag searches
+postSchema.index({ createdAt: -1 }); // For general sorting
 // ========== MIDDLEWARE - NO NEXT() ==========
 // ✅ FIXED: No next() parameter
 postSchema.pre('save', async function () {
