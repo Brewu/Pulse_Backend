@@ -273,7 +273,7 @@ router.post('/profile/cover', protect, uploadCoverPicture, async (req, res) => {
  */
 router.get('/google', (req, res) => {
   const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback';
-  
+
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
     `client_id=${process.env.GOOGLE_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
@@ -326,7 +326,7 @@ router.get('/google/callback', async (req, res) => {
     const profile = await userResponse.json();
 
     // Find or create user
-    let user = await User.findOne({ 
+    let user = await User.findOne({
       $or: [
         { googleId: profile.sub },
         { email: profile.email }
@@ -365,65 +365,72 @@ router.get('/google/callback', async (req, res) => {
 
     // Redirect back to frontend with token (for popup to catch)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    
-    // Send HTML that will post message to parent window
+
+    // In your auth.js callback, update the HTML response
+
     res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Google Login Success</title>
-        <style>
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>Google Login Success</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+      }
+      .container {
+        text-align: center;
+        padding: 2rem;
+        background: rgba(255,255,255,0.1);
+        border-radius: 1rem;
+        backdrop-filter: blur(10px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Login Successful! 🎉</h2>
+      <p>Redirecting you back to Pulse...</p>
+    </div>
+    <script>
+      (function() {
+        try {
+          // Try multiple methods to communicate with parent
+          if (window.opener) {
+            window.opener.postMessage({
+              type: 'GOOGLE_LOGIN_SUCCESS',
+              token: '${jwtToken}',
+              user: ${JSON.stringify(userData)}
+            }, '${frontendUrl}');
+            
+            setTimeout(() => {
+              window.close();
+            }, 1500);
+          } else if (window.parent !== window) {
+            window.parent.postMessage({
+              type: 'GOOGLE_LOGIN_SUCCESS',
+              token: '${jwtToken}',
+              user: ${JSON.stringify(userData)}
+            }, '${frontendUrl}');
+          } else {
+            // Fallback: redirect to callback page
+            window.location.href = '${frontendUrl}/google-callback?token=${jwtToken}';
           }
-          .container {
-            text-align: center;
-            padding: 2rem;
-            background: rgba(255,255,255,0.1);
-            border-radius: 1rem;
-            backdrop-filter: blur(10px);
-          }
-          .spinner {
-            width: 40px;
-            height: 40px;
-            margin: 1rem auto;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            border-top-color: white;
-            animation: spin 1s ease-in-out infinite;
-          }
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h2>Login Successful! 🎉</h2>
-          <div class="spinner"></div>
-          <p>Redirecting you back to Pulse...</p>
-        </div>
-        <script>
-          window.opener.postMessage({
-            type: 'GOOGLE_LOGIN_SUCCESS',
-            token: '${jwtToken}',
-            user: ${JSON.stringify(userData)}
-          }, '${frontendUrl}');
-          
-          setTimeout(() => {
-            window.close();
-          }, 1500);
-        </script>
-      </body>
-      </html>
-    `);
+        } catch (e) {
+          console.error('Error in postMessage:', e);
+          window.location.href = '${frontendUrl}/google-callback?token=${jwtToken}';
+        }
+      })();
+    </script>
+  </body>
+  </html>
+`);
 
   } catch (error) {
     console.error('Google callback error:', error);
@@ -462,7 +469,7 @@ router.post('/google/token', async (req, res) => {
     const profile = await response.json();
 
     // Find or create user
-    let user = await User.findOne({ 
+    let user = await User.findOne({
       $or: [
         { googleId: profile.sub },
         { email: profile.email }

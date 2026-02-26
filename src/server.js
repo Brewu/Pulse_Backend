@@ -10,6 +10,15 @@ const messageRoutes = require('./routes/messageRoutes');
 const websocketService = require('./services/websocket'); // Adjust path if needed
 
 const app = express();
+// In your server.js, add this middleware BEFORE your routes
+
+app.use((req, res, next) => {
+  // Set COOP and COEP headers to allow popup communication
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
 const server = http.createServer(app);
 
 // Initialize WebSocket with the service (secure, auto-join, no globals)
@@ -24,8 +33,8 @@ connectDB();
 // CORS middleware (single source of truth)
 app.use(cors({
   origin: [
-   "https://pulse-backend-tpg8.onrender.com",
-   "https://pulse-eta-cyan.vercel.app",
+    "https://pulse-backend-tpg8.onrender.com",
+    "https://pulse-eta-cyan.vercel.app",
     "http://localhost:3000",
     "http://192.168.56.1:3000"
     // Add production origins here
