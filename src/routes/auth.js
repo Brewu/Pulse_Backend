@@ -6,6 +6,7 @@ const { protect } = require('../middleware/auth');
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
+const crypto = require('crypto'); // Add this for random password generation
 
 const router = express.Router();
 
@@ -258,6 +259,256 @@ router.post('/profile/cover', protect, uploadCoverPicture, async (req, res) => {
   } catch (error) {
     console.error('Upload cover picture error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// =============================================
+// GOOGLE OAUTH ENDPOINTS (NO SESSIONS - USING JWT)
+// =============================================
+
+/**
+ * @route   GET /api/auth/google
+ * @desc    Redirect to Google OAuth (popup flow)
+ * @access  Public
+ */
+router.get('/google', (req, res) => {
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback';
+  
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${process.env.GOOGLE_CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent('profile email')}` +
+    `&access_type=offline` +
+    `&prompt=consent`;
+
+  res.redirect(googleAuthUrl);
+});
+
+/**
+ * @route   GET /api/auth/google/callback
+ * @desc    Google OAuth callback (popup flow)
+ * @access  Public
+ */
+router.get('/google/callback', async (req, res) => {
+  try {
+    const { code } = req.query;
+
+    if (!code) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=google-auth-failed`);
+    }
+
+    // Exchange code for tokens
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback',
+        grant_type: 'authorization_code'
+      })
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok) {
+      console.error('Google token error:', tokenData);
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=google-auth-failed`);
+    }
+
+    // Get user info from Google
+    const userResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+
+    const profile = await userResponse.json();
+
+    // Find or create user
+    let user = await User.findOne({ 
+      $or: [
+        { googleId: profile.sub },
+        { email: profile.email }
+      ]
+    });
+
+    if (!user) {
+      // Create new user
+      const username = profile.email.split('@')[0] + Math.floor(Math.random() * 1000);
+
+      user = new User({
+        googleId: profile.sub,
+        username: username.toLowerCase(),
+        email: profile.email.toLowerCase(),
+        name: profile.name,
+        profilePicture: profile.picture,
+        isGoogleUser: true,
+        emailVerified: true,
+        password: crypto.randomBytes(20).toString('hex')
+      });
+
+      await user.save();
+    } else if (!user.googleId) {
+      // Link Google account to existing user
+      user.googleId = profile.sub;
+      user.isGoogleUser = true;
+      await user.save();
+    }
+
+    // Generate JWT token
+    const jwtToken = generateToken(user._id);
+
+    // Prepare user response (remove password)
+    const userData = user.toObject();
+    delete userData.password;
+
+    // Redirect back to frontend with token (for popup to catch)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    
+    // Send HTML that will post message to parent window
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Google Login Success</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+          }
+          .container {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(255,255,255,0.1);
+            border-radius: 1rem;
+            backdrop-filter: blur(10px);
+          }
+          .spinner {
+            width: 40px;
+            height: 40px;
+            margin: 1rem auto;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+          }
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h2>Login Successful! 🎉</h2>
+          <div class="spinner"></div>
+          <p>Redirecting you back to Pulse...</p>
+        </div>
+        <script>
+          window.opener.postMessage({
+            type: 'GOOGLE_LOGIN_SUCCESS',
+            token: '${jwtToken}',
+            user: ${JSON.stringify(userData)}
+          }, '${frontendUrl}');
+          
+          setTimeout(() => {
+            window.close();
+          }, 1500);
+        </script>
+      </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('Google callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=server-error`);
+  }
+});
+
+/**
+ * @route   POST /api/auth/google/token
+ * @desc    Exchange Google access token for JWT (for mobile apps)
+ * @access  Public
+ */
+router.post('/google/token', async (req, res) => {
+  try {
+    const { accessToken } = req.body;
+
+    if (!accessToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Access token required'
+      });
+    }
+
+    // Verify token with Google
+    const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (!response.ok) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid Google token'
+      });
+    }
+
+    const profile = await response.json();
+
+    // Find or create user
+    let user = await User.findOne({ 
+      $or: [
+        { googleId: profile.sub },
+        { email: profile.email }
+      ]
+    });
+
+    if (!user) {
+      const username = profile.email.split('@')[0] + Math.floor(Math.random() * 1000);
+
+      user = new User({
+        googleId: profile.sub,
+        username: username.toLowerCase(),
+        email: profile.email.toLowerCase(),
+        name: profile.name,
+        profilePicture: profile.picture,
+        isGoogleUser: true,
+        emailVerified: true,
+        password: crypto.randomBytes(20).toString('hex')
+      });
+
+      await user.save();
+    } else if (!user.googleId) {
+      user.googleId = profile.sub;
+      user.isGoogleUser = true;
+      await user.save();
+    }
+
+    // Generate JWT
+    const jwtToken = generateToken(user._id);
+
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
+    res.json({
+      success: true,
+      message: 'Google authentication successful',
+      token: jwtToken,
+      user: userResponse
+    });
+
+  } catch (error) {
+    console.error('Google token exchange error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to authenticate with Google'
+    });
   }
 });
 
