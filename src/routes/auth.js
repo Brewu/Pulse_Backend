@@ -1,9 +1,11 @@
-// First: Fix your current auth routes file (remove the broken lines and clean it up)
-
+// routes/auth.js
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { protect } = require('../middleware/auth'); // Use your protect middleware!
+const { protect } = require('../middleware/auth');
+const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('../utils/cloudinary');
 
 const router = express.Router();
 
@@ -13,6 +15,40 @@ const generateToken = (id) => {
     expiresIn: '30d',
   });
 };
+
+// Configure Cloudinary storage for profile pictures
+const profilePictureStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'profile-pictures',
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'gif'],
+    transformation: [{ width: 400, height: 400, crop: 'fill' }]
+  }
+});
+
+// Configure Cloudinary storage for cover photos
+const coverPictureStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'cover-photos',
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'gif'],
+    transformation: [{ width: 1200, height: 400, crop: 'fill' }]
+  }
+});
+
+const uploadProfilePicture = multer({
+  storage: profilePictureStorage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+}).single('profilePicture');
+
+const uploadCoverPicture = multer({
+  storage: coverPictureStorage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+}).single('coverPicture');
+
+// =============================================
+// AUTH ENDPOINTS
+// =============================================
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
@@ -55,18 +91,57 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// POST /api/auth/login
+// POST /api/auth/login - UPDATED to accept email OR username
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, username, password } = req.body;
 
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({
+    // Check if either email or username is provided
+    const loginIdentifier = email || username;
+
+    if (!loginIdentifier) {
+      return res.status(400).json({
         success: false,
-        message: 'Invalid email or password'
+        message: 'Please provide email or username'
       });
     }
+
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide password'
+      });
+    }
+
+    console.log(`🔐 Login attempt with: ${loginIdentifier}`);
+
+    // Find user by email OR username
+    const user = await User.findOne({
+      $or: [
+        { email: loginIdentifier.toLowerCase() },
+        { username: loginIdentifier.toLowerCase() }
+      ]
+    }).select('+password');
+
+    if (!user) {
+      console.log(`❌ User not found: ${loginIdentifier}`);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Check password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      console.log(`❌ Invalid password for user: ${user.username}`);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    console.log(`✅ Login successful for: ${user.username} (${user.email})`);
 
     const token = generateToken(user._id);
     const userResponse = user.toObject();
@@ -84,15 +159,15 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/auth/me - Get authenticated user (now uses protect middleware)
+// GET /api/auth/me - Get authenticated user
 router.get('/me', protect, async (req, res) => {
   res.json({
     success: true,
-    user: req.user // protect already attached the user (without password)
+    user: req.user
   });
 });
 
-// PUT /api/auth/profile - Update profile (now uses protect)
+// PUT /api/auth/profile - Update profile
 router.put('/profile', protect, async (req, res) => {
   try {
     const { name, bio, profilePicture, coverPicture } = req.body;
@@ -119,41 +194,10 @@ router.put('/profile', protect, async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
-const multer = require('multer');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const cloudinary = require('../utils/cloudinary');
 
-// Configure Cloudinary storage for profile pictures
-const profilePictureStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'profile-pictures',
-    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'gif'],
-    transformation: [{ width: 400, height: 400, crop: 'fill' }]
-  }
-});
-
-// Configure Cloudinary storage for cover photos
-const coverPictureStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'cover-photos',
-    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'gif'],
-    transformation: [{ width: 1200, height: 400, crop: 'fill' }]
-  }
-});
-
-const uploadProfilePicture = multer({ 
-  storage: profilePictureStorage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
-}).single('profilePicture');
-
-const uploadCoverPicture = multer({ 
-  storage: coverPictureStorage,
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
-}).single('coverPicture');
-
-// ========== NEW ENDPOINTS ==========
+// =============================================
+// PROFILE PICTURE UPLOADS
+// =============================================
 
 /**
  * @route   POST /api/auth/profile/picture
@@ -163,9 +207,9 @@ const uploadCoverPicture = multer({
 router.post('/profile/picture', protect, uploadProfilePicture, async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No file uploaded' 
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
       });
     }
 
@@ -194,9 +238,9 @@ router.post('/profile/picture', protect, uploadProfilePicture, async (req, res) 
 router.post('/profile/cover', protect, uploadCoverPicture, async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No file uploaded' 
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
       });
     }
 
