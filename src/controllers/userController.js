@@ -10,28 +10,50 @@ const NotificationService = require('../services/notificationService');
  * @desc    Get user by username
  * @route   GET /api/users/profile/:username
  * @access  Public/Private (with auth)
+ * 
  */
+// controllers/userController.js - Add these methods
+
+exports.updatePhoneNumber = async (req, res) => {
+  // Implementation
+};
+
+exports.verifyPhone = async (req, res) => {
+  // Implementation
+};
+
+exports.getNotificationPreferences = async (req, res) => {
+  // Implementation
+};
+
+exports.updateNotificationPreferences = async (req, res) => {
+  // Implementation
+};
+
+exports.deleteAccount = async (req, res) => {
+  // Implementation
+};
 exports.getUserByUsername = async (req, res) => {
   try {
     const { username } = req.params;
-    
+
     const user = await User.findOne({ username })
       .select('-password -__v')
       .lean();
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     // Add computed virtuals since .lean() doesn't include them
     user.followerCount = user.followers?.length || 0;
     user.followingCount = user.following?.length || 0;
-    
+
     // Check if current user is following (if authenticated)
     if (req.user) {
       user.isFollowing = user.followers?.includes(req.user.id) || false;
     }
-    
+
     res.json(user);
   } catch (error) {
     console.error('getUserByUsername error:', error);
@@ -47,24 +69,24 @@ exports.getUserByUsername = async (req, res) => {
 exports.getUserById = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const user = await User.findById(id)
       .select('-password -__v')
       .lean();
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     // Add computed virtuals
     user.followerCount = user.followers?.length || 0;
     user.followingCount = user.following?.length || 0;
-    
+
     // Check if current user is following (if authenticated)
     if (req.user) {
       user.isFollowing = user.followers?.includes(req.user.id) || false;
     }
-    
+
     res.json(user);
   } catch (error) {
     console.error('getUserById error:', error);
@@ -232,7 +254,7 @@ exports.getFollowers = async (req, res) => {
     if (req.user) {
       const currentUser = await User.findById(req.user.id).select('following');
       const followingSet = new Set(currentUser.following.map(id => id.toString()));
-      
+
       followers.forEach(user => {
         user.isFollowing = followingSet.has(user._id.toString());
       });
@@ -299,7 +321,7 @@ exports.getFollowing = async (req, res) => {
     if (req.user) {
       const currentUser = await User.findById(req.user.id).select('following');
       const followingSet = new Set(currentUser.following.map(id => id.toString()));
-      
+
       following.forEach(user => {
         user.isFollowing = followingSet.has(user._id.toString());
       });
@@ -351,13 +373,13 @@ exports.getFollowing = async (req, res) => {
 exports.searchUsers = async (req, res) => {
   try {
     const { q } = req.query;
-    
+
     if (!q || q.trim() === '') {
       return res.json({ success: true, data: [] });
     }
 
     const searchRegex = new RegExp(q, 'i');
-    
+
     const users = await User.find({
       $and: [
         { _id: { $ne: req.user.id } }, // Exclude current user
@@ -370,12 +392,12 @@ exports.searchUsers = async (req, res) => {
         }
       ]
     })
-    .select('name username avatar bio isOnline lastSeen')
-    .limit(20);
+      .select('name username avatar bio isOnline lastSeen')
+      .limit(20);
 
     // Add mutual follow information
     const currentUser = await User.findById(req.user.id);
-    
+
     const usersWithFollowInfo = users.map(user => {
       const userObj = user.toObject();
       userObj.isFollowing = currentUser.following.includes(user._id);
@@ -384,9 +406,9 @@ exports.searchUsers = async (req, res) => {
       return userObj;
     });
 
-    res.json({ 
-      success: true, 
-      data: usersWithFollowInfo 
+    res.json({
+      success: true,
+      data: usersWithFollowInfo
     });
   } catch (error) {
     console.error('Search users error:', error);
@@ -403,7 +425,7 @@ exports.getSuggestions = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
     const suggestions = await User.getSuggestions(req.user.id, limit);
-    
+
     // Add following status (false since they're suggestions)
     suggestions.forEach(user => {
       user.isFollowing = false;
@@ -439,7 +461,7 @@ exports.updateProfile = async (req, res) => {
 
     // Allowed fields to update
     const allowedUpdates = [
-      'name', 'bio', 'profilePicture', 'coverPicture', 
+      'name', 'bio', 'profilePicture', 'coverPicture',
       'privacySettings'
     ];
 

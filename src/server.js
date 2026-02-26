@@ -8,6 +8,8 @@ const conversationRoutes = require('./routes/conversationRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 // Import the clean websocket service
 const websocketService = require('./services/websocket'); // Adjust path if needed
+// Add with your other routes
+const passwordResetRoutes = require('./routes/passwordReset'); // ✅ NEW: Password reset routes
 
 const app = express();
 // In your server.js, add this middleware BEFORE your routes
@@ -93,7 +95,6 @@ const routes = [
   { path: '/api/comments', file: './routes/commentRoutes' },
   { path: '/api/notifications', file: './routes/notificationRoutes' },
   { path: '/api/conversations', file: './routes/conversationRoutes' }
-
 ];
 
 routes.forEach(route => {
@@ -105,6 +106,14 @@ routes.forEach(route => {
     console.log(`❌ Failed to load ${route.path}:`, error.message);
   }
 });
+
+// ✅ NEW: Mount password reset routes
+try {
+  app.use('/api/auth', passwordResetRoutes); // This adds /forgot-password, /reset-password/:token, etc.
+  console.log(`✅ Loaded password reset routes under /api/auth`);
+} catch (error) {
+  console.log(`❌ Failed to load password reset routes:`, error.message);
+}
 
 // IMPORTANT: Mount message routes UNDER conversations
 // This ensures /api/conversations/:conversationId/messages works

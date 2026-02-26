@@ -32,6 +32,20 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: [50, 'Name cannot exceed 50 characters']
   },
+  phoneNumber: {
+    type: String,
+    trim: true,
+    sparse: true, // Allows null/undefined values
+    index: true
+  },
+  phoneCountryCode: {
+    type: String,
+    default: '+1' // Default to US/Canada, but users can change
+  },
+  isPhoneVerified: {
+    type: Boolean,
+    default: false
+  },
 
   profilePicture: {
     type: String,
@@ -298,9 +312,51 @@ const userSchema = new mongoose.Schema({
       return ret;
     }
   },
-  toObject: { virtuals: true }
+  toObject: { virtuals: true },
+  phoneVerificationCode: String,
+  phoneVerificationExpire: Date,
+
+  // Login preferences
+  loginMethods: {
+    email: { type: Boolean, default: true },
+    phone: { type: Boolean, default: false },
+    google: { type: Boolean, default: false }
+  }
+}, {
+  timestamps: true
+
 });
 
+userSchema.methods.generatePasswordResetToken = function () {
+  // Generate a random token
+  const resetToken = crypto.randomBytes(20).toString('hex');
+
+  // Hash token and set to resetPasswordToken field
+  this.resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  // Set expire (10 minutes)
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+
+  return resetToken;
+};
+
+// Add method to generate phone verification code
+userSchema.methods.generatePhoneVerificationCode = function () {
+  // Generate 6-digit code
+  const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+  this.phoneVerificationCode = crypto
+    .createHash('sha256')
+    .update(verificationCode)
+    .digest('hex');
+
+  this.phoneVerificationExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  return verificationCode;
+};
 // ========== INDEXES ==========
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
