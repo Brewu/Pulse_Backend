@@ -367,10 +367,6 @@ router.post('/test', protect, async (req, res) => {
 });
 
 // =============================================
-// SEND NOTIFICATION TO SPECIFIC USER (Internal use) - SINGLE VERSION
-// =============================================
-// This endpoint is for your notification service to trigger push notifications
-// =============================================
 // SEND NOTIFICATION TO SPECIFIC USER
 // =============================================
 router.post('/send/:userId', protect, async (req, res) => {
@@ -385,11 +381,7 @@ router.post('/send/:userId', protect, async (req, res) => {
             });
         }
 
-        // FIXED: Allow users to send notifications to others for messages
-        // But you might want to restrict it to only when they're in a conversation
-        // For now, we'll allow it for message notifications
-
-        // Optional: You could add a check to ensure they have a conversation together
+        // Check if they have a conversation together
         const Conversation = require('../models/Conversation');
         const haveConversation = await Conversation.findOne({
             type: 'direct',
@@ -474,92 +466,91 @@ router.post('/send/:userId', protect, async (req, res) => {
             error: 'Failed to send notification'
         });
     }
-    // Add this to your pushRoutes.js
+});
 
-    // =============================================
-    // SEND MESSAGE NOTIFICATION (Special endpoint for messages)
-    // =============================================
-    router.post('/message/:userId', protect, async (req, res) => {
-        try {
-            const { userId } = req.params;
-            const { title, body, data } = req.body;
+// =============================================
+// SEND MESSAGE NOTIFICATION (Special endpoint for messages)
+// =============================================
+router.post('/message/:userId', protect, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { title, body, data } = req.body;
 
-            if (!title || !body) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Title and body are required'
-                });
-            }
-
-            // Verify they have a conversation together
-            const Conversation = require('../models/Conversation');
-            const conversation = await Conversation.findOne({
-                type: 'direct',
-                participants: { $all: [req.user.id, userId] }
-            });
-
-            if (!conversation) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'You can only send messages to users you have a conversation with'
-                });
-            }
-
-            const user = await User.findById(userId).select('pushSubscriptions');
-
-            if (!user || !user.pushSubscriptions || user.pushSubscriptions.length === 0) {
-                return res.json({
-                    success: true,
-                    message: 'No subscriptions found',
-                    sentCount: 0
-                });
-            }
-
-            const payload = JSON.stringify({
-                title,
-                body,
-                icon: '/logo192.png',
-                badge: '/badge-72x72.png',
-                data: data || { type: 'message', url: `/messages/${conversation._id}` },
-                timestamp: new Date().toISOString()
-            });
-
-            const results = await Promise.allSettled(
-                user.pushSubscriptions.map(async (subscription) => {
-                    try {
-                        await webpush.sendNotification({
-                            endpoint: subscription.endpoint,
-                            keys: subscription.keys
-                        }, payload);
-                        return { success: true };
-                    } catch (error) {
-                        if (error.statusCode === 410) {
-                            await User.findByIdAndUpdate(
-                                userId,
-                                { $pull: { pushSubscriptions: { endpoint: subscription.endpoint } } }
-                            );
-                        }
-                        return { success: false };
-                    }
-                })
-            );
-
-            const successCount = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-
-            res.json({
-                success: true,
-                message: `Message notification sent to ${successCount} devices`,
-                sentCount: successCount
-            });
-
-        } catch (error) {
-            console.error('Error sending message notification:', error);
-            res.status(500).json({
+        if (!title || !body) {
+            return res.status(400).json({
                 success: false,
-                error: 'Failed to send message notification'
+                error: 'Title and body are required'
             });
         }
-    });
+
+        // Verify they have a conversation together
+        const Conversation = require('../models/Conversation');
+        const conversation = await Conversation.findOne({
+            type: 'direct',
+            participants: { $all: [req.user.id, userId] }
+        });
+
+        if (!conversation) {
+            return res.status(403).json({
+                success: false,
+                error: 'You can only send messages to users you have a conversation with'
+            });
+        }
+
+        const user = await User.findById(userId).select('pushSubscriptions');
+
+        if (!user || !user.pushSubscriptions || user.pushSubscriptions.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No subscriptions found',
+                sentCount: 0
+            });
+        }
+
+        const payload = JSON.stringify({
+            title,
+            body,
+            icon: '/logo192.png',
+            badge: '/badge-72x72.png',
+            data: data || { type: 'message', url: `/messages/${conversation._id}` },
+            timestamp: new Date().toISOString()
+        });
+
+        const results = await Promise.allSettled(
+            user.pushSubscriptions.map(async (subscription) => {
+                try {
+                    await webpush.sendNotification({
+                        endpoint: subscription.endpoint,
+                        keys: subscription.keys
+                    }, payload);
+                    return { success: true };
+                } catch (error) {
+                    if (error.statusCode === 410) {
+                        await User.findByIdAndUpdate(
+                            userId,
+                            { $pull: { pushSubscriptions: { endpoint: subscription.endpoint } } }
+                        );
+                    }
+                    return { success: false };
+                }
+            })
+        );
+
+        const successCount = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+
+        res.json({
+            success: true,
+            message: `Message notification sent to ${successCount} devices`,
+            sentCount: successCount
+        });
+
+    } catch (error) {
+        console.error('Error sending message notification:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to send message notification'
+        });
+    }
 });
 
 module.exports = router;
