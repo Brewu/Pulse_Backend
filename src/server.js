@@ -39,7 +39,9 @@ app.use(cors({
     "https://pulse-eta-cyan.vercel.app",
     "http://localhost:3000",
     "http://192.168.56.1:3000",
-    "https://10.30.22.195:3000"
+    "https://10.30.22.195:3000",
+    "https://rabbiespulse.vercel.app/",
+    "https://vercel.com/brewu-richard-appiahs-projects/rabbiespulse/7JQR9SL4LSvEAYpMrG5uY7oogNE5"
     // Add production origins here
   ],
   credentials: true,
