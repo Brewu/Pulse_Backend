@@ -251,7 +251,7 @@ router.get('/tag/:tag', [
  */
 router.get('/', protect, asyncHandler(async (req, res) => {
   console.log('📡 GET /api/posts called with query:', req.query);
-  
+
   const user = await User.findById(req.user._id).select('following');
   if (!user) {
     return res.status(404).json({ success: false, message: 'User not found' });
@@ -746,6 +746,8 @@ router.post('/:id/like', protect,
           postId: post._id,
           senderId: req.user._id,
           senderUsername: req.user.username,
+          type: 'like',  // Add this,
+
           senderProfilePicture: req.user.profilePicture,
           postContent: post.content?.substring(0, 100),
           timestamp: new Date().toISOString()

@@ -8,15 +8,37 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
 const NotificationMiddleware = require('../middleware/NotificationMiddleware'); // ADDED
 // ========== PUSH NOTIFICATION HELPER ==========
+// ========== PUSH NOTIFICATION HELPER WITH DEBUG ==========
 const sendPushNotification = async (userId, notificationData) => {
   try {
+    console.log('\n📨 ===== PUSH NOTIFICATION ATTEMPT =====');
+    console.log(`📍 Timestamp: ${new Date().toLocaleTimeString()}`);
+    console.log(`👤 Sender: ${notificationData.data?.senderUsername || 'Unknown'}`);
+    console.log(`👤 Recipient ID: ${userId}`);
+    console.log(`📋 Notification Title: "${notificationData.title}"`);
+    console.log(`📋 Notification Body: "${notificationData.body}"`);
+    console.log(`📋 Notification Type: ${notificationData.type}`);
+    console.log(`📋 Additional Data:`, notificationData.data);
+
     // Don't send if no userId
-    if (!userId) return;
+    if (!userId) {
+      console.log('❌ No userId provided');
+      return;
+    }
 
     const pushService = require('../services/pushNotificationService');
-    await pushService.sendToUser(userId, notificationData);
+    const result = await pushService.sendToUser(userId, notificationData);
+
+    if (result) {
+      console.log(`✅ Push notification sent successfully to ${userId}`);
+    } else {
+      console.log(`ℹ️ No devices to notify for user ${userId} (user may not have subscriptions)`);
+    }
+
+    console.log('=====================================\n');
   } catch (error) {
-    console.error('Error sending push notification:', error);
+    console.error('❌ Error sending push notification:', error);
+    console.log('=====================================\n');
   }
 };
 // ========== SAFE MODEL IMPORTS ==========
