@@ -45,19 +45,45 @@ const toAbsoluteMedia = (req, media = []) => {
   }));
 };
 
-// ========== MULTER CONFIG ==========
+// ========== UPDATED MULTER CONFIG ==========
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'posts',
-    allowed_formats: ['jpg', 'png', 'gif', 'mp4', 'mov', 'webp'],
+    allowed_formats: ['jpg', 'png', 'gif', 'mp4', 'mov', 'webp', 'avi', 'mkv'],
     resource_type: 'auto'
   }
 });
 
+// Increased limit from 10MB to 50MB
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  limits: { 
+    fileSize: 50 * 1024 * 1024, // 50MB in bytes
+    files: 10 // Maximum number of files
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow images and videos
+    const allowedMimeTypes = [
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'video/mp4',
+      'video/webm',
+      'video/ogg',
+      'video/quicktime', // .mov
+      'video/x-msvideo', // .avi
+      'video/x-matroska' // .mkv
+    ];
+    
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only images and videos are allowed'), false);
+    }
+  }
 });
 
 // ========== ASYNC HANDLER WRAPPER ==========
@@ -75,7 +101,11 @@ router.get('/health', (req, res) => {
       Post: !!Post,
       User: !!User
     },
-    dbState: mongoose.connection.readyState
+    dbState: mongoose.connection.readyState,
+    uploadLimits: {
+      maxFileSize: '50MB',
+      maxFiles: 10
+    }
   });
 });
 
@@ -416,13 +446,36 @@ router.get('/user/:userId', [
 
 /**
  * @route   POST /api/posts
- * @desc    Create a new post
+ * @desc    Create a new post with up to 50MB media files
  * @access  Private
  */
 router.post(
   '/',
   protect,
-  upload.array('media', 10),
+  (req, res, next) => {
+    // Handle large file uploads with custom error messages
+    upload.array('media', 10)(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            success: false,
+            message: 'File too large. Maximum file size is 50MB.'
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          return res.status(400).json({
+            success: false,
+            message: 'Too many files. Maximum is 10 files.'
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
+      next();
+    });
+  },
   [
     body('content').optional().trim().isLength({ max: 5000 }).withMessage('Content cannot exceed 5000 characters'),
     body('visibility').optional().isIn(['public', 'followers', 'private']),
@@ -441,6 +494,17 @@ router.post(
         success: false,
         message: 'Post must have either content or media'
       });
+    }
+
+    // Calculate total file size
+    if (req.files) {
+      const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+      if (totalSize > 50 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          message: 'Total media size exceeds 50MB limit'
+        });
+      }
     }
 
     let hashtags = [];
@@ -470,7 +534,8 @@ router.post(
         mediaType: file.mimetype.startsWith('video/') ? 'video' : 'image',
         format: file.format,
         width: file.width,
-        height: file.height
+        height: file.height,
+        size: file.size // Store file size for reference
       };
 
       // Attach edits if available for this index
@@ -1417,9 +1482,27 @@ router.use((err, req, res, next) => {
 
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, message: 'File too large (max 10MB)' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'File too large. Maximum file size is 50MB.' 
+      });
     }
-    return res.status(400).json({ success: false, message: err.message });
+    if (err.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Too many files. Maximum is 10 files.' 
+      });
+    }
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Unexpected field name for file upload.' 
+      });
+    }
+    return res.status(400).json({ 
+      success: false, 
+      message: `Upload error: ${err.message}` 
+    });
   }
 
   res.status(err.status || 500).json({

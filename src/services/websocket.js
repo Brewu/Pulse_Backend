@@ -11,7 +11,8 @@ module.exports = {
           'http://localhost:3000',
           'http://localhost:5173',
           "https://pulse-eta-cyan.vercel.app",
-          "http://192.168.56.1:3000"
+          "http://192.168.56.1:3000",
+          "https://pulse-swart-nine.vercel.app"
           // Add production frontend URL here, e.g.:
           // 'https://yourdomain.com'
         ],
