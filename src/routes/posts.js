@@ -733,8 +733,14 @@ router.post('/:id/like', protect,
       });
     }
 
-    // 🔔 Send rich push notification to post author (if not self-like)
+    // In posts.js - around line 560
     if (post.author._id.toString() !== req.user._id.toString()) {
+      console.log('\n🔔🔔🔔 ===== LIKE PUSH ATTEMPT START ===== 🔔🔔🔔');
+      console.log(`   From: ${req.user.username} (${req.user._id})`);
+      console.log(`   To: ${post.author.username} (${post.author._id})`);
+      console.log(`   Post ID: ${post._id}`);
+      console.log(`   Time: ${new Date().toLocaleTimeString()}`);
+
       const notificationData = {
         title: '❤️ New Like',
         body: `${req.user.username} liked your post`,
@@ -746,18 +752,23 @@ router.post('/:id/like', protect,
           postId: post._id,
           senderId: req.user._id,
           senderUsername: req.user.username,
-          type: 'like',  // Add this,
-
           senderProfilePicture: req.user.profilePicture,
           postContent: post.content?.substring(0, 100),
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          type: 'like'
         }
       };
 
-      // Send push notification asynchronously
-      sendPushNotification(post.author._id, notificationData).catch(console.error);
-    }
+      console.log('📦 Notification data prepared:');
+      console.log(JSON.stringify(notificationData, null, 2));
 
+      // Send push notification asynchronously
+      sendPushNotification(post.author._id, notificationData)
+        .then(() => console.log('✅ sendPushNotification completed'))
+        .catch(err => console.error('❌ sendPushNotification error:', err));
+
+      console.log('🔔🔔🔔 ===== LIKE PUSH ATTEMPT END ===== 🔔🔔🔔\n');
+    }
     res.json({
       success: true,
       likesCount: post.likesCount,

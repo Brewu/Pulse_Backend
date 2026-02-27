@@ -81,62 +81,105 @@ class PushNotificationService {
 
   // Send push notification to a specific user
   async sendToUser(userId, notificationData) {
+    console.log('\n📱📱📱 ===== PUSH SERVICE ENTERED ===== 📱📱📱');
+    console.log(`📍 Timestamp: ${new Date().toLocaleTimeString()}`);
+    console.log(`👤 Target User ID: ${userId}`);
+    console.log(`📋 Notification Type: ${notificationData.type}`);
+    console.log(`📋 Title: "${notificationData.title}"`);
+    console.log(`📋 Body: "${notificationData.body}"`);
+    console.log(`📦 Full notification data:`, JSON.stringify(notificationData, null, 2));
+
     try {
       const User = require('mongoose').model('User');
+      console.log(`🔍 Fetching user ${userId} from database...`);
+
       const user = await User.findById(userId).select('pushSubscriptions notificationPreferences');
 
       if (!user) {
-        console.log(`User ${userId} not found`);
+        console.log(`❌ User ${userId} not found in database`);
         return false;
       }
+
+      console.log(`✅ User found: ${user._id}`);
+      console.log(`📊 User has ${user.pushSubscriptions?.length || 0} push subscriptions`);
 
       // Check if user has any push subscriptions
       if (!user.pushSubscriptions || user.pushSubscriptions.length === 0) {
-        console.log(`No push subscriptions for user ${userId}`);
+        console.log(`ℹ️ No push subscriptions for user ${userId}`);
         return false;
       }
 
+      // Log each subscription
+      user.pushSubscriptions.forEach((sub, index) => {
+        console.log(`   Subscription ${index + 1}:`);
+        console.log(`      Platform: ${sub.platform}`);
+        console.log(`      Device: ${sub.deviceName?.substring(0, 50)}...`);
+        console.log(`      Endpoint: ${sub.endpoint?.substring(0, 60)}...`);
+        console.log(`      Last Used: ${sub.lastUsed}`);
+        console.log(`      Active: ${sub.isActive}`);
+      });
+
       // Check user's notification preferences
       if (user.notificationPreferences) {
+        console.log(`📋 User preferences:`, JSON.stringify(user.notificationPreferences, null, 2));
+
         // Global push preference
         if (user.notificationPreferences.global?.push === false) {
-          console.log(`User ${userId} has disabled all push notifications`);
+          console.log(`🚫 User has disabled all push notifications globally`);
           return false;
         }
 
         // Check specific notification type
         const type = notificationData.type;
         if (user.notificationPreferences.types?.[type]?.push === false) {
-          console.log(`User ${userId} has disabled ${type} notifications`);
+          console.log(`🚫 User has disabled ${type} notifications in preferences`);
           return false;
+        } else {
+          console.log(`✅ User has enabled ${type} notifications`);
         }
       }
 
       // Prepare notification payload based on platform
+      console.log(`🔧 Building payload for notification...`);
       const payload = this.buildPayload(notificationData);
+      console.log(`📦 Payload built:`, JSON.stringify(payload, null, 2));
 
       // Send to all user's devices
-      const sendPromises = user.pushSubscriptions.map(async (subscription) => {
-        try {
-          let result = false;
+      console.log(`📤 Attempting to send to ${user.pushSubscriptions.length} devices...`);
 
+      const sendPromises = user.pushSubscriptions.map(async (subscription, index) => {
+        console.log(`\n📱 Processing device ${index + 1}/${user.pushSubscriptions.length}`);
+
+        try {
           // Only send to active subscriptions
-          if (subscription.isActive === false) return false;
+          if (subscription.isActive === false) {
+            console.log(`⏭️ Skipping inactive subscription`);
+            return false;
+          }
+
+          console.log(`   Platform: ${subscription.platform}`);
+          console.log(`   Endpoint: ${subscription.endpoint?.substring(0, 60)}...`);
+
+          let result = false;
 
           switch (subscription.platform) {
             case 'web':
+              console.log(`   Sending web push via VAPID...`);
               result = await this.sendWebPush(subscription, payload);
               break;
             case 'ios':
             case 'android':
+              console.log(`   Sending Expo push...`);
               result = await this.sendExpoPush(subscription, payload);
               break;
             default:
+              console.log(`   Unknown platform, trying web push...`);
               result = await this.sendWebPush(subscription, payload);
           }
 
           // Update last used time on success
           if (result) {
+            console.log(`   ✅ Successfully sent to device`);
             await User.updateOne(
               {
                 _id: userId,
@@ -146,16 +189,19 @@ class PushNotificationService {
                 $set: { 'pushSubscriptions.$.lastUsed': new Date() }
               }
             );
+          } else {
+            console.log(`   ❌ Failed to send to device`);
           }
 
           return result;
         } catch (error) {
+          console.error(`   ❌ Error sending to device:`, error.message);
+
           // If subscription is invalid/expired (410 Gone), remove it
           if (error.statusCode === 410 || error.statusCode === 404) {
-            console.log(`Removing invalid subscription for user ${userId}`);
+            console.log(`   🔄 Removing invalid subscription for user ${userId}`);
             await this.removeSubscription(userId, subscription.endpoint);
           }
-          console.error(`Failed to send to device:`, error.message);
           return false;
         }
       });
@@ -163,11 +209,18 @@ class PushNotificationService {
       const results = await Promise.allSettled(sendPromises);
       const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
 
+      console.log(`\n📊 ===== PUSH SUMMARY =====`);
+      console.log(`   Total devices: ${user.pushSubscriptions.length}`);
+      console.log(`   Successful: ${successCount}`);
+      console.log(`   Failed: ${results.length - successCount}`);
       console.log(`📱 Push sent to ${successCount}/${user.pushSubscriptions.length} devices for user ${userId}`);
+      console.log('=====================================\n');
+
       return successCount > 0;
 
     } catch (error) {
-      console.error('Error sending push notification:', error);
+      console.error('❌ Error sending push notification:', error);
+      console.log('=====================================\n');
       return false;
     }
   }
@@ -315,11 +368,12 @@ class PushNotificationService {
         keys: subscription.keys || {}
       };
 
+      console.log(`   📤 Sending web push to endpoint: ${subscription.endpoint?.substring(0, 60)}...`);
       await webpush.sendNotification(pushSubscription, JSON.stringify(payload));
-      console.log('✅ Web push sent successfully');
+      console.log('   ✅ Web push sent successfully');
       return true;
     } catch (error) {
-      console.error('Web push failed:', error);
+      console.error('   ❌ Web push failed:', error.message);
       throw error; // Re-throw to handle in caller
     }
   }
@@ -340,6 +394,8 @@ class PushNotificationService {
         mutableContent: true, // For iOS notification service extensions
       };
 
+      console.log(`   📤 Sending Expo push to: ${subscription.endpoint?.substring(0, 60)}...`);
+
       const response = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: {
@@ -354,14 +410,14 @@ class PushNotificationService {
       const result = await response.json();
 
       if (result.data?.status === 'ok') {
-        console.log('✅ Expo push sent successfully');
+        console.log('   ✅ Expo push sent successfully');
         return true;
       } else {
-        console.error('Expo push failed:', result);
+        console.error('   ❌ Expo push failed:', result);
         return false;
       }
     } catch (error) {
-      console.error('Expo push error:', error);
+      console.error('   ❌ Expo push error:', error);
       throw error;
     }
   }
