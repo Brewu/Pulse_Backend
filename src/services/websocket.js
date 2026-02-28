@@ -8,7 +8,8 @@ module.exports = {
     io = socketIo(server, {
       cors: {
         origin: [
-        "https://2a4b7aaf.pulse-social.pages.dev"
+        "https://2a4b7aaf.pulse-social.pages.dev",
+          "https://main.pulse-social.pages.dev"
           // Add production frontend URL here, e.g.:
           // 'https://yourdomain.com'
         ],
