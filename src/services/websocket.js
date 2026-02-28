@@ -9,6 +9,8 @@ module.exports = {
       cors: {
         origin: [
           'http://localhost:3000',
+         "https://main.pulse-social.pages.dev/",
+    "https://2a4b7aaf.pulse-social.pages.dev/",
           'http://localhost:5173',
           "https://pulse-eta-cyan.vercel.app",
           "http://192.168.56.1:3000",
