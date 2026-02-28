@@ -8,15 +8,7 @@ module.exports = {
     io = socketIo(server, {
       cors: {
         origin: [
-          'http://localhost:3000',
-         "https://main.pulse-social.pages.dev/",
-    "https://2a4b7aaf.pulse-social.pages.dev/",
-          'http://localhost:5173',
-          "https://pulse-eta-cyan.vercel.app",
-          "http://192.168.56.1:3000",
-          "https://pulse-swart-nine.vercel.app",
-          "https://vercel.com/brewu-richard-appiahs-projects/rabbiespulse/7JQR9SL4LSvEAYpMrG5uY7oogNE5",
-          "https://rabbiespulse.vercel.app/"
+        "https://2a4b7aaf.pulse-social.pages.dev"
           // Add production frontend URL here, e.g.:
           // 'https://yourdomain.com'
         ],
