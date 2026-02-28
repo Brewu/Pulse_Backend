@@ -35,16 +35,7 @@ connectDB();
 // CORS middleware (single source of truth)
 app.use(cors({
   origin: [
-    "https://pulse-backend-tpg8.onrender.com",
-    "https://pulse-eta-cyan.vercel.app",
-    "http://localhost:3000",
-    "http://192.168.56.1:3000",
-    "https://10.30.22.195:3000",
-    "https://rabbiespulse.vercel.app/",
-    "https://main.pulse-social.pages.dev/",
-    "https://2a4b7aaf.pulse-social.pages.dev/",
-    "https://vercel.com/brewu-richard-appiahs-projects/rabbiespulse/7JQR9SL4LSvEAYpMrG5uY7oogNE5"
-    // Add production origins here
+"https://2a4b7aaf.pulse-social.pages.dev"    // Add production origins here
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
