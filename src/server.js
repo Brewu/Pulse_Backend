@@ -35,7 +35,8 @@ connectDB();
 // CORS middleware (single source of truth)
 app.use(cors({
   origin: [
-"https://2a4b7aaf.pulse-social.pages.dev"    // Add production origins here
+"https://2a4b7aaf.pulse-social.pages.dev",
+    "https://main.pulse-social.pages.dev"// Add production origins here
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
